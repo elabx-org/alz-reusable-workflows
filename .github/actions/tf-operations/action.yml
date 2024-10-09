@@ -39,7 +39,7 @@ runs:
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
-        terraform_wrapper: false #required to expose tf operation exit codes
+        terraform_wrapper: false  # required to expose tf operation exit codes
 
     - name: Terraform Operation
       id: tf_operation
