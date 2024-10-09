@@ -1,0 +1,646 @@
+---
+name: Reusable Module Validate & Release
+
+on:
+  workflow_call:
+    inputs:
+      runs_on: {type: string, description: 'JSON string defining the runner. Use {"runner": "ubuntu-latest"} for GitHub-hosted runner or {"group": "replacesvcs", "labels": ["self-hosted", "prod", "linuxdefender"]} for custom runner.'}
+      ref: {type: string, default: 'main', description: 'Branch, tag or SHA to checkout'}
+      increment: {type: string, default: 'patch', description: 'Version increment type (patch, minor, major)'}
+      force_release: {type: boolean, default: false, description: 'Force release creation without code changes'}
+      install_gh_cli: {type: boolean, default: true, description: 'Install GitHub CLI'}
+      terraform_working_dir: {type: string, default: '.', description: 'Terraform working directory'}
+      run_check_tf_changes: {type: boolean, default: true, description: 'Run check-tf-changes job'}
+      run_validate_module: {type: boolean, default: true, description: 'Run validate-module job'}
+      run_tf_docs: {type: boolean, default: false, description: 'Run tf-docs job and generate docs'}
+      run_release_and_tag: {type: boolean, default: true, description: 'Run release-and-tag job'}
+      tf_docs_output_file: {type: string, default: 'README.md', description: 'terraform-docs output file'}
+      tf_docs_config_file: {type: string, default: '.terraform-docs.yml', description: 'terraform-docs config file'}
+      tf_docs_clear_workspace: {type: boolean, default: false, description: 'Clean workspace before terraform-docs'}
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  output-config:
+    name: 'Output Configuration'
+    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
+    steps:
+      - name: Summarise Configuration
+        env:
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          {
+            echo "## 🛠️ Workflow Config"
+            echo "| General | Job Execution | Terraform Docs |"
+            echo "|---------|---------------|----------------|"
+            echo "| 🖥️ Runner: \`${{ inputs.runs_on }}\` | 📋 Check TF: \`${{ inputs.run_check_tf_changes }}\` | 📄 Output: \`${{ inputs.tf_docs_output_file }}\` |"
+            echo "| 🔖 Branch: \`$HEAD_REF\` | 📋 Validate: \`${{ inputs.run_validate_module }}\` | ⚙️ Config: \`${{ inputs.tf_docs_config_file }}\` |"
+            echo "| 🔼 Version Increment: \`${{ inputs.increment }}\` | 📋 TF Docs: \`${{ inputs.run_tf_docs }}\` | 🧹 Clear Workspace: \`${{ inputs.tf_docs_clear_workspace }}\` |"
+            echo "| 🚀 Force: \`${{ inputs.force_release }}\` | 📋 Release: \`${{ inputs.run_release_and_tag }}\` | |"
+            echo "| 🛠️ GH CLI: \`${{ inputs.install_gh_cli }}\` | | |"
+            echo "| 📁 TF Dir: \`${{ inputs.terraform_working_dir }}\` | | |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  check-tf-changes:
+    name: 'Check for Terraform Changes'
+    needs: output-config
+    if: always()
+    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
+    outputs:
+      tf_changed: ${{ steps.check_files.outputs.tf_changed || 'unknown' }}
+      force_release: ${{ steps.check_files.outputs.force_release || 'false' }}
+      changed_files: ${{ steps.check_files.outputs.changed_files }}
+      check_run: ${{ steps.should_run.outputs.check_run }}
+      status: ${{ steps.set_outputs.outputs.status }}
+      details: ${{ steps.set_outputs.outputs.details }}
+    steps:
+      - name: Check if should run
+        id: should_run
+        run: |
+          if [[ "${{ inputs.run_check_tf_changes }}" == "true" ]]; then
+            echo "check_run=true" >> "$GITHUB_OUTPUT"
+            echo "Will proceed with Terraform change check"
+          else
+            echo "check_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping Terraform change check because inputs.run_check_tf_changes is not true"
+          fi
+
+      - name: Debug Inputs
+        run: |
+          echo "inputs.run_check_tf_changes: ${{ inputs.run_check_tf_changes }}"
+          echo "inputs.force_release: ${{ inputs.force_release }}"
+          echo "inputs.ref: ${{ inputs.ref }}"
+          echo "github.event_name: ${{ github.event_name }}"
+          echo "github.ref: ${{ github.ref }}"
+
+      - name: Checkout code
+        if: steps.should_run.outputs.check_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Debug Git Info
+        if: steps.should_run.outputs.check_run == 'true'
+        run: |
+          echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "Current commit: $(git rev-parse HEAD)"
+          echo "All branches:"
+          git branch -a
+          echo "All tags:"
+          git tag
+
+      - name: Get latest tag
+        if: steps.should_run.outputs.check_run == 'true'
+        id: get_latest_tag
+        run: |
+          latest_tag=$(git describe --tags --abbrev=0 || echo "v0.0.0")
+          echo "LATEST_TAG=${latest_tag}" >> "$GITHUB_ENV"
+          echo "Latest tag is ${latest_tag}"
+
+      - name: Check for .tf file changes
+        if: steps.should_run.outputs.check_run == 'true'
+        id: check_files
+        env:
+          GH_HEAD_REF: ${{ github.head_ref }}
+          GH_BASE_REF: ${{ github.base_ref }}
+        run: |
+          echo "Event name: ${{ github.event_name }}"
+          echo "GitHub ref: ${{ github.ref }}"
+          echo "Input ref: ${{ inputs.ref }}"
+          echo "Base ref: $GH_BASE_REF"
+          echo "Head ref: $GH_HEAD_REF"
+          echo "Before SHA: ${{ github.event.before }}"
+          echo "After SHA: ${{ github.sha }}"
+
+          tf_changes=""
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "Checking changes since last tag"
+            tf_changes=$(git diff --name-only "${{ env.LATEST_TAG }}" HEAD | grep '\.tf$' || true)
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "Checking changes in pull request"
+            git fetch origin "$GH_BASE_REF"
+            tf_changes=$(git diff --name-only "origin/$GH_BASE_REF"..HEAD | grep '\.tf$' || true)
+          else
+            echo "Checking changes in push"
+            tf_changes=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" | grep '\.tf$' || true)
+          fi
+
+          echo "All changed files:"
+          git diff --name-only "${{ env.LATEST_TAG }}" HEAD || echo "No changes detected"
+
+          echo "Terraform changes:"
+          echo "$tf_changes"
+
+          {
+            if [[ -n "$tf_changes" ]]; then
+              echo "tf_changed=true"
+              echo "changed_files<<EOF"
+              echo "$tf_changes"
+              echo "EOF"
+            else
+              echo "tf_changed=false"
+              echo "changed_files=none"
+            fi
+
+            if [[ "${{ inputs.force_release }}" == "true" ]]; then
+              echo "force_release=true"
+            else
+              echo "force_release=false"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+          # Print the content of GITHUB_OUTPUT for debugging
+          echo "Content of GITHUB_OUTPUT:"
+          cat "$GITHUB_OUTPUT"
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          if [[ "${{ steps.should_run.outputs.check_run }}" == "true" ]]; then
+            echo "status=✅ Executed" >> "$GITHUB_OUTPUT"
+            echo "details=Changes detected: ${{ steps.check_files.outputs.tf_changed }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=⏭️ Skipped" >> "$GITHUB_OUTPUT"
+            echo "details=run_check_tf_changes is not true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Job Summary
+        run: |
+          {
+            echo "### Check Terraform Changes Summary"
+            echo "| Aspect | Details |"
+            echo "|--------|---------|"
+            echo "| Status | ${{ steps.set_outputs.outputs.status }} |"
+            echo "| Details | ${{ steps.set_outputs.outputs.details }} |"
+            if [[ "${{ steps.should_run.outputs.check_run }}" == "true" ]]; then
+              echo "| Terraform Changes Detected | ${{ steps.check_files.outputs.tf_changed }} |"
+              echo "| Force Release | ${{ steps.check_files.outputs.force_release }} |"
+              if [[ "${{ steps.check_files.outputs.tf_changed }}" == "true" ]]; then
+                echo "| Changed Files | |"
+                echo "\`\`\`"
+                echo "${{ steps.check_files.outputs.changed_files }}"
+                echo "\`\`\`"
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  validate-module:
+    name: 'Validate Module'
+    needs: check-tf-changes
+    if: always()
+    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
+    outputs:
+      status: ${{ steps.set_outputs.outputs.status }}
+      details: ${{ steps.set_outputs.outputs.details }}
+    steps:
+      - name: Check validation requirements
+        id: validation_check
+        run: |
+          validate_module="false"
+          skip_reason=""
+
+          # Prioritize run_validate_module. If true, always validate.
+          if [[ "${{ inputs.run_validate_module }}" == "true" ]]; then
+            validate_module="true"
+          elif [[ "${{ needs.check-tf-changes.outputs.tf_changed }}" != "true" && "${{ inputs.force_release }}" != "true" ]]; then
+            skip_reason="No Terraform changes detected and force_release is not true"
+            validate_module="false"
+          else
+            validate_module="true"
+          fi
+
+          echo "validate_module=$validate_module" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        if: steps.validation_check.outputs.validate_module == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        if: steps.validation_check.outputs.validate_module == 'true'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        if: steps.validation_check.outputs.validate_module == 'true'
+        run: terraform -chdir="${{ inputs.terraform_working_dir }}" init -backend=false
+
+      - name: Terraform Format Check
+        if: steps.validation_check.outputs.validate_module == 'true'
+        run: terraform -chdir="${{ inputs.terraform_working_dir }}" fmt -check -recursive
+
+      - name: Terraform Validate
+        if: steps.validation_check.outputs.validate_module == 'true'
+        run: terraform -chdir="${{ inputs.terraform_working_dir }}" validate
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          if [[ "${{ steps.validation_check.outputs.validate_module }}" == "true" ]]; then
+            echo "status=✅ Executed" >> "$GITHUB_OUTPUT"
+            echo "details=All validations passed" >> "$GITHUB_OUTPUT"
+          else
+            # Check if the job was intentionally disabled via input.
+            if [[ "${{ inputs.run_validate_module }}" != "true" ]]; then
+              skip_reason="run_validate_module is not true"
+            else
+              # Use the skip_reason set in the validation_check step.
+              skip_reason="${{ steps.validation_check.outputs.skip_reason }}"
+            fi
+            echo "status=⏭️ Skipped" >> "$GITHUB_OUTPUT"
+            echo "details=$skip_reason" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Job Summary
+        run: |
+          {
+            echo "### Validate Module Summary"
+            echo "| Aspect | Details |"
+            echo "|--------|---------|"
+            echo "| Status | ${{ steps.set_outputs.outputs.status }} |"
+            echo "| Details | ${{ steps.set_outputs.outputs.details }} |"
+            if [[ "${{ steps.validation_check.outputs.validate_module }}" == "true" ]]; then
+              echo "| Terraform Init | Completed |"
+              echo "| Terraform Format Check | Passed |"
+              echo "| Terraform Validate | Passed |"
+              echo "| Working Directory | ${{ inputs.terraform_working_dir }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release-and-tag:
+    name: 'Create Release and Tag'
+    needs: [check-tf-changes, validate-module]
+    if: always()
+    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
+    outputs:
+      status: ${{ steps.set_outputs.outputs.status }}
+      details: ${{ steps.set_outputs.outputs.details }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all tags
+        run: |
+          git fetch --tags -f
+          git fetch --all
+
+      - name: Get latest tag
+        run: |
+          latest_tag=$(git describe --tags --abbrev=0 || echo "v0.0.0")
+          echo "LATEST_TAG=${latest_tag}" >> "$GITHUB_ENV"
+          echo "Latest tag is ${latest_tag}"
+
+      - name: Check for .tf file changes
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch origin "${{ github.base_ref }}"
+            tf_changes=$(git diff --name-only "origin/${{ github.base_ref }}"..HEAD | grep -c '\.tf$' || true)
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            tf_changes=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" | grep -c '\.tf$' || true)
+          else
+            tf_changes=$(git diff --name-only "${{ env.LATEST_TAG }}" HEAD | grep -c '\.tf$' || true)
+          fi
+          echo "TF_CHANGES=${tf_changes}" >> "$GITHUB_ENV"
+          echo "Terraform file changes: ${tf_changes}"
+
+      - name: Determine if release should be created
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" && "${{ github.event_name }}" == "push" && "${{ env.TF_CHANGES }}" != "0" ]]; then
+            echo "CREATE_RELEASE=true" >> "$GITHUB_ENV"
+            release_info="Push event on main branch with .tf changes, will create release"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" && "${{ inputs.force_release }}" == "true" ]]; then
+            echo "CREATE_RELEASE=true" >> "$GITHUB_ENV"
+            release_info="Force release requested on main branch, will create release"
+          else
+            echo "CREATE_RELEASE=false" >> "$GITHUB_ENV"
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              echo "COMMENT_ON_PR=true" >> "$GITHUB_ENV"
+              release_info="Pull request event, will calculate version increment"
+            else
+              echo "COMMENT_ON_PR=false" >> "$GITHUB_ENV"
+              release_info="Conditions for release creation not met"
+            fi
+          fi
+          echo "RELEASE_INFO=${release_info}" >> "$GITHUB_ENV"
+
+      - name: Install GitHub CLI
+        if: inputs.install_gh_cli
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y gh
+
+      - name: Determine increment type from commit messages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_PR_TITLE: ${{ github.event.pull_request.title }}
+          GH_PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [[ "${{ inputs.install_gh_cli }}" == "true" ]]; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              commit_messages=$(gh pr view "$GH_PR_NUMBER" --json commits --jq '.commits[].messageHeadline')
+              all_text="$commit_messages $GH_PR_TITLE $GH_PR_BODY"
+            elif [[ "${{ github.event_name }}" == "push" ]]; then
+              all_text=$(git log -1 --pretty=%B)
+              pr_number=$(echo "$all_text" | sed -n 's/.*#\([0-9]\+\).*/\1/p')
+              if [[ -n "$pr_number" ]]; then
+                pr_info=$(gh pr view "$pr_number" --json title,body)
+                pr_title=$(echo "$pr_info" | jq -r '.title')
+                pr_body=$(echo "$pr_info" | jq -r '.body')
+                all_text="$all_text $pr_title $pr_body"
+              fi
+            else
+              all_text=$(git log -1 --pretty=%B)
+            fi
+          else
+            all_text=$(git log -1 --pretty=%B)
+          fi
+
+          if echo "$all_text" | grep -qiE "\b(BREAKING CHANGE|MAJOR)\b"; then
+            echo "DETECTED_INCREMENT_TYPE=major" >> "$GITHUB_ENV"
+          elif echo "$all_text" | grep -qiE "\bminor\b"; then
+            echo "DETECTED_INCREMENT_TYPE=minor" >> "$GITHUB_ENV"
+          else
+            echo "DETECTED_INCREMENT_TYPE=patch" >> "$GITHUB_ENV"
+          fi
+          echo "Detected increment type from commit messages: ${{ env.DETECTED_INCREMENT_TYPE }}"
+
+      - name: Set final increment type
+        run: |
+          if [[ "${{ env.CREATE_RELEASE }}" == "true" || "${{ env.COMMENT_ON_PR }}" == "true" ]]; then
+            if [[ "${{ inputs.increment }}" != "patch" ]]; then
+              echo "INCREMENT_TYPE=${{ inputs.increment }}" >> "$GITHUB_ENV"
+              echo "INCREMENT_TYPE_SOURCE=manual_input" >> "$GITHUB_ENV"
+            else
+              echo "INCREMENT_TYPE=${{ env.DETECTED_INCREMENT_TYPE }}" >> "$GITHUB_ENV"
+              echo "INCREMENT_TYPE_SOURCE=commit_messages" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "INCREMENT_TYPE=${{ inputs.increment }}" >> "$GITHUB_ENV"
+            echo "INCREMENT_TYPE_SOURCE=default_input" >> "$GITHUB_ENV"
+          fi
+
+      - name: Calculate expected version and comment on PR
+        if: env.COMMENT_ON_PR == 'true' && inputs.install_gh_cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          current_tag="${{ env.LATEST_TAG }}"
+          if [[ "$current_tag" == "v0.0.0" ]]; then
+            expected_version="v0.0.1"
+          else
+            IFS='.' read -ra version_parts <<< "${current_tag#v}"
+            if [[ "${{ env.INCREMENT_TYPE }}" == "minor" ]]; then
+              expected_version="v${version_parts[0]}.$((version_parts[1] + 1)).0"
+            elif [[ "${{ env.INCREMENT_TYPE }}" == "major" ]]; then
+              expected_version="v$((version_parts[0] + 1)).0.0"
+            else
+              expected_version="v${version_parts[0]}.${version_parts[1]}.$((version_parts[2] + 1))"
+            fi
+          fi
+
+          release_info="A new release will be created when this PR is merged to the main branch, assuming Terraform changes are still present."
+
+          gh pr comment "$PR_NUMBER" --body "Suggested version increment: ${{ env.INCREMENT_TYPE }}
+          Expected next version: $expected_version
+
+          $release_info
+
+          Note: The actual release creation depends on the state of the main branch at the time of merging and the final content of this PR."
+
+      - name: Determine expected version
+        id: determine_version
+        run: |
+          current_tag="${{ env.LATEST_TAG }}"
+          if [[ "$current_tag" == "v0.0.0" ]]; then
+            expected_version="v0.0.1"
+          else
+            IFS='.' read -ra version_parts <<< "${current_tag#v}"
+            if [[ "${{ env.INCREMENT_TYPE }}" == "minor" ]]; then
+              expected_version="v${version_parts[0]}.$((version_parts[1] + 1)).0"
+            elif [[ "${{ env.INCREMENT_TYPE }}" == "major" ]]; then
+              expected_version="v$((version_parts[0] + 1)).0.0"
+            else
+              expected_version="v${version_parts[0]}.${version_parts[1]}.$((version_parts[2] + 1))"
+            fi
+          fi
+          echo "EXPECTED_VERSION=${expected_version}" >> "$GITHUB_ENV"
+
+      - name: Bump version
+        if: env.CREATE_RELEASE == 'true'
+        run: |
+          current_tag="${{ env.LATEST_TAG }}"
+          if [[ "$current_tag" == "v0.0.0" ]]; then
+            new_tag="v0.0.1"
+          else
+            IFS='.' read -ra version_parts <<< "${current_tag#v}"
+            if [[ "${{ env.INCREMENT_TYPE }}" == "minor" ]]; then
+              new_tag="v${version_parts[0]}.$((version_parts[1] + 1)).0"
+            elif [[ "${{ env.INCREMENT_TYPE }}" == "major" ]]; then
+              new_tag="v$((version_parts[0] + 1)).0.0"
+            else
+              new_tag="v${version_parts[0]}.${version_parts[1]}.$((version_parts[2] + 1))"
+            fi
+          fi
+          echo "NEW_TAG=${new_tag}" >> "$GITHUB_ENV"
+          echo "New tag will be ${new_tag}"
+
+      - name: Push new tag
+        if: env.CREATE_RELEASE == 'true'
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag "${{ env.NEW_TAG }}"
+          git push origin "${{ env.NEW_TAG }}"
+          echo "Pushed new tag ${{ env.NEW_TAG }}"
+
+      - name: Get commit message
+        if: env.CREATE_RELEASE == 'true'
+        run: |
+          commit_message=$(git log -1 --pretty=%B)
+          {
+            echo 'COMMIT_MESSAGE<<EOF'
+            echo "$commit_message"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+          echo "Commit message retrieved"
+
+      - name: Create Release
+        if: env.CREATE_RELEASE == 'true' && inputs.install_gh_cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ env.NEW_TAG }}" \
+            --title "Release ${{ env.NEW_TAG }}" \
+            --notes "**Commit message:** ${{ env.COMMIT_MESSAGE }}" \
+            --generate-notes
+          echo "Created release ${{ env.NEW_TAG }}"
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          if [[ "${{ env.CREATE_RELEASE }}" == "true" ]]; then
+            echo "status=✅ Executed" >> "$GITHUB_OUTPUT"
+            echo "details=New tag: ${{ env.NEW_TAG }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=⏭️ Skipped" >> "$GITHUB_OUTPUT"
+            echo "details=${{ env.RELEASE_INFO }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Job Summary
+        run: |
+          {
+            echo "### Release and Tag Summary"
+            echo "| Aspect | Details |"
+            echo "|--------|---------|"
+            echo "| Status | ${{ steps.set_outputs.outputs.status }} |"
+            echo "| Details | ${{ steps.set_outputs.outputs.details }} |"
+            echo "| Event Type | ${{ github.event_name }} |"
+            echo "| Branch | ${{ github.ref }} |"
+            echo "| Force Release | ${{ inputs.force_release }} |"
+            echo "| Detected Increment Type (from commits) | ${{ env.DETECTED_INCREMENT_TYPE }} |"
+            echo "| Final Increment Type | ${{ env.INCREMENT_TYPE }} |"
+            echo "| Increment Type Source | ${{ env.INCREMENT_TYPE_SOURCE }} |"
+            echo "| Terraform Changes Detected | ${{ needs.check-tf-changes.outputs.tf_changed }} |"
+            if [[ "${{ needs.check-tf-changes.outputs.tf_changed }}" == "true" ]]; then
+              echo "| Expected Version | ${{ env.EXPECTED_VERSION }} |"
+            fi
+            if [[ "${{ env.CREATE_RELEASE }}" == "true" ]]; then
+              echo "| Latest Tag | ${{ env.LATEST_TAG }} |"
+              echo "| New Tag | ${{ env.NEW_TAG }} |"
+            fi
+            if [[ "${{ env.COMMENT_ON_PR }}" == "true" ]]; then
+              echo "| PR Comment | Added |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tf-docs:
+    name: 'Generate Terraform Docs'
+    needs: [output-config, check-tf-changes, validate-module, release-and-tag]
+    if: always()
+    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
+    outputs:
+      status: ${{ steps.set_outputs.outputs.status }}
+      details: ${{ steps.set_outputs.outputs.details }}
+    steps:
+      - name: Check conditions
+        id: check_conditions
+        run: |
+          should_run="true"
+          skip_reason=""
+
+          if [[ "${{ inputs.run_tf_docs }}" != "true" ]]; then
+            should_run="false"
+            skip_reason="run_tf_docs is not true"
+          fi
+
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+      - name: Clear workspace
+        if: steps.check_conditions.outputs.should_run == 'true' && inputs.tf_docs_clear_workspace == 'true'
+        run: |
+          sudo rm -rf .git
+          git init
+
+      - uses: actions/checkout@v4
+        if: steps.check_conditions.outputs.should_run == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.head_ref }}
+
+      - name: Render terraform docs and push changes back to PR
+        if: steps.check_conditions.outputs.should_run == 'true'
+        uses: terraform-docs/gh-actions@v1.2.0
+        with:
+          working-dir: ${{ inputs.terraform_working_dir }}
+          output-file: ${{ inputs.tf_docs_output_file }}
+          output-method: inject
+          git-push: "false"
+          config-file: ${{ inputs.tf_docs_config_file }}
+
+      - name: Set permissions for .git directory
+        run: sudo chmod -R 777 .git
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Commit changes
+        if: steps.check_conditions.outputs.should_run == 'true'
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add ${{ inputs.terraform_working_dir }}/${{ inputs.tf_docs_output_file }}
+          # Check if there are any changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "terraform-docs: automated action"
+            git push
+          fi
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          {
+            if [[ "${{ steps.check_conditions.outputs.should_run }}" == "true" ]]; then
+              echo "status=✅ Executed"
+              echo "details=Docs generated and committed"
+            else
+              echo "status=⏭️ Skipped"
+              echo "details=${{ steps.check_conditions.outputs.skip_reason }}"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Job Summary
+        run: |
+          {
+            echo "### Generate Terraform Docs Summary"
+            echo "| Aspect | Details |"
+            echo "|--------|---------|"
+            echo "| Status | ${{ steps.set_outputs.outputs.status }} |"
+            echo "| Details | ${{ steps.set_outputs.outputs.details }} |"
+            if [[ "${{ steps.check_conditions.outputs.should_run }}" == "true" ]]; then
+              echo "| Output File | ${{ inputs.tf_docs_output_file }} |"
+              echo "| Config File | ${{ inputs.tf_docs_config_file }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  workflow-summary:
+    name: 'Workflow Execution Overview'
+    needs: [output-config, check-tf-changes, validate-module, tf-docs, release-and-tag]
+    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
+    steps:
+      - name: Create workflow summary
+        run: |
+          {
+            echo "## Workflow Summary"
+            echo "| Job | Status | Details |"
+            echo "|-----|--------|---------|"
+            echo "| Output Config | ✅ Executed | Configuration displayed at start of workflow |"
+            echo "| Check TF Changes | ${{ needs.check-tf-changes.outputs.status }} | ${{ needs.check-tf-changes.outputs.details }} |"
+            echo "| Validate Module | ${{ needs.validate-module.outputs.status }} | ${{ needs.validate-module.outputs.details }} |"
+            echo "| Generate TF Docs | ${{ needs.tf-docs.outputs.status }} | ${{ needs.tf-docs.outputs.details }} |"
+            echo "| Release and Tag | ${{ needs.release-and-tag.outputs.status }} | ${{ needs.release-and-tag.outputs.details }} |"
+            echo ""
+            echo "For full details, please check the logs of individual jobs."
+          } >> "$GITHUB_STEP_SUMMARY"

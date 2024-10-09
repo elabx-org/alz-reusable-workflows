@@ -1,0 +1,130 @@
+---
+name: 'Terraform Operations'
+description: 'Run Terraform init, plan, format, validate, and optionally apply with error handling'
+
+inputs:
+  working_directory:
+    description: 'The working directory where Terraform configurations are located'
+    required: true
+  backend_config:
+    description: 'Backend configuration for terraform init'
+    required: true
+  init_args:
+    description: 'Additional arguments for terraform init'
+    default: ''
+  plan_args:
+    description: 'Additional arguments for terraform plan'
+    default: ''
+  checks_args:
+    description: 'Additional arguments for terraform Checks Apply'
+    default: ''
+  test_args:
+    description: 'Additional arguments for terraform test'
+    default: ''
+  operation:
+    description: 'Terraform operation to perform (init, plan, apply, format, test, check, or validate)'
+    required: true
+  secret_variables_json:
+    description: 'JSON Key-Value pair of secrets to set Terraform Variables for.'
+    default: '{}'
+
+outputs:
+  exitcode:
+    description: 'The exit code of the terraform command'
+    value: ${{ steps.tf_operation.outputs.exitcode }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_wrapper: false #required to expose tf operation exit codes
+
+    - name: Terraform Operation
+      id: tf_operation
+      shell: bash
+      run: |
+        echo
+        echo "=========================================================="
+        echo "Terraform ${{ inputs.operation }}"
+        echo "Starting Terraform ${{ inputs.operation }} at $(date)"
+        echo "Working directory: ${{ inputs.working_directory }}"
+        echo "=========================================================="
+        echo
+        exit_code=0
+
+        echo "Set secret vars"
+        secret_json='${{ inputs.secret_variables_json }}'
+        for key in $(echo $secret_json | jq -r ' keys | .[]'); do
+          # Utilize your variables
+          echo "Set variable for: ${key}"
+          export "TF_VAR_${key}"="$(echo $secret_json  | jq -r ".${key}")"
+        done
+
+        case "${{ inputs.operation }}" in
+          init)
+            echo "Backend config: ${{ inputs.backend_config }}"
+            echo "Init args: ${{ inputs.init_args }}"
+            terraform -chdir=${{ inputs.working_directory }} init \
+              ${{ inputs.backend_config }} \
+              ${{ inputs.init_args }}
+            exit_code=$?
+            echo
+            ;;
+          plan)
+            echo "Plan args: ${{ inputs.plan_args }}"
+            terraform -chdir=${{ inputs.working_directory }} plan ${{ inputs.plan_args }} -detailed-exitcode -out=tfplan || exit_code=$?
+            if [ $exit_code -eq 1 ]; then
+              echo
+              echo "Terraform Plan Failed!"
+              exit $exit_code
+            elif [ $exit_code -eq 2 ]; then
+              echo
+              echo "::notice::Terraform plan indicates changes to be made"
+              exit_code=2
+            else
+              echo
+              echo "Terraform plan succeeded with no changes"
+              exit_code=0
+            fi
+            echo
+            ;;
+          test)
+            echo "Test args: ${{ inputs.test_args }}"
+            cd ${{ inputs.working_directory }}
+            terraform test ${{ inputs.test_args }}
+            exit_code=$?
+            echo
+            ;;
+          apply)
+            terraform -chdir=${{ inputs.working_directory }} apply -auto-approve tfplan
+            exit_code=$?
+            echo
+            ;;
+          check)
+            echo "Checks args: ${{ inputs.checks_args }}"
+            terraform -chdir=${{ inputs.working_directory }} apply ${{ inputs.checks_args }} -auto-approve -state-out="./terraform.tfstate"
+            exit_code=$?
+            echo
+            ;;
+          format)
+            terraform -chdir=${{ inputs.working_directory }} fmt -check -recursive
+            exit_code=$?
+            echo
+            ;;
+          validate)
+            terraform -chdir=${{ inputs.working_directory }} validate
+            exit_code=$?
+            echo
+            ;;
+          *)
+            echo "::error::Invalid operation: ${{ inputs.operation }}"
+            exit_code=1
+            echo
+            ;;
+        esac
+
+        echo "exitcode=$exit_code" >> $GITHUB_OUTPUT
+        echo "Completed Terraform ${{ inputs.operation }} at $(date)"
+        echo "${{ inputs.operation }} exit code: $exit_code"

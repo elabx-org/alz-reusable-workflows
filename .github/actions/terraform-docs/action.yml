@@ -1,0 +1,41 @@
+---
+name: 'Terraform Docs'
+description: 'Generate Terraform documentation'
+
+inputs:
+  working_directory:
+    description: 'The working directory where Terraform configurations are located'
+    required: true
+  output_file:
+    description: 'Output file for Terraform docs'
+    required: true
+  config_file:
+    description: 'Config file for Terraform docs'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Generate Terraform Docs
+      uses: terraform-docs/gh-actions@v1
+      with:
+        working-dir: ${{ inputs.working_directory }}
+        output-file: ${{ inputs.output_file }}
+        output-method: inject
+        git-push: "false"
+        config-file: ${{ inputs.config_file }}
+
+    - name: Commit Terraform Docs changes
+      shell: bash
+      run: |
+        sudo chmod 777 -R .git/objects
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add ${{ inputs.working_directory }}/${{ inputs.output_file }}
+        # Check if there are any changes to commit
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "terraform-docs: automated action"
+          git push
+        fi

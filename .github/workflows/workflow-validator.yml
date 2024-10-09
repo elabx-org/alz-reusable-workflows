@@ -1,0 +1,130 @@
+---
+name: Validator
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/linters/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  lint:
+    name: 'lint-workflows-actions-scripts'
+    runs-on: >-
+      ${{
+        (contains(vars.RUNNER_CONFIG, '{') && contains(vars.RUNNER_CONFIG, '}'))
+        && (fromJSON(vars.RUNNER_CONFIG).runner || fromJSON(vars.RUNNER_CONFIG).labels)
+        || vars.RUNNER_CONFIG
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Super-Linter
+        uses: github/super-linter@v5
+        env:
+          VALIDATE_ALL_CODEBASE: ${{ github.ref == 'refs/heads/main' }}
+          VALIDATE_YAML: true
+          VALIDATE_GITHUB_ACTIONS: true
+          VALIDATE_POWERSHELL: true
+          VALIDATE_BASH: true
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FILTER_REGEX_INCLUDE: '(\.github/workflows/.*|\.github/actions/.*|.*\.ps1|.*\.sh|.*\.bash)'
+          YAML_CONFIG_FILE: .yaml-lint.yml
+          LINTER_RULES_PATH: .github/linters/
+          OUTPUT_DETAILS: detailed
+          OUTPUT_FORMAT: yaml
+          CREATE_LOG_FILE: true
+          # LOG_LEVEL: DEBUG
+
+      - name: Upload Super-Linter log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-linter-log
+          path: super-linter.log
+
+      - name: Process Linting Results
+        id: lint_results
+        if: always()
+        run: |
+          {
+            echo "## Linting Results"
+            echo "Super-Linter outcome: ${{ job.status }}"
+            echo
+            echo "### Processed Files"
+            echo "| File | Linter | Status |"
+            echo "|------|--------|--------|"
+            if [ -f "${GITHUB_WORKSPACE}/super-linter.log" ]; then
+              # Process log file
+              current_file=""
+              sed 's/\x1b\[[0-9;]*m//g' "${GITHUB_WORKSPACE}/super-linter.log" | while IFS= read -r line; do
+                if [[ $line =~ File:\[\/github\/workspace\/(.*)\]$ ]]; then
+                  current_file="${BASH_REMATCH[1]}"
+                elif [[ $line =~ File:\[(.*)\].*was\ linted\ with\ \[(.*)\]\ successfully ]]; then
+                  linter="${BASH_REMATCH[2]}"
+                  if [[ -n "$current_file" ]]; then
+                    echo "| $current_file | $linter | ✅ Pass |"
+                    current_file=""
+                  fi
+                elif [[ $line =~ Found\ errors\ in\ \[(.*)\]\ linter! ]]; then
+                  linter="${BASH_REMATCH[1]}"
+                  if [[ -n "$current_file" ]]; then
+                    echo "| $current_file | $linter | ❌ Fail |"
+                    current_file=""
+                  fi
+                fi
+              done | sort -u
+            else
+              echo "| No linting log file found | - | - |"
+            fi
+            echo
+            echo "For detailed results, please refer the job output or download the 'super-linter-log' artifact from the workflow run summary page."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "summary<<EOF"
+            cat "$GITHUB_STEP_SUMMARY"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Comment PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.issue.number || github.event.pull_request.number;
+            console.log(`Owner: ${owner}, Repo: ${repo}, Issue Number: ${issue_number}`);
+            if (!issue_number) {
+              console.log('No issue or pull request number found.');
+              return;
+            }
+            if (!owner || !repo) {
+              console.log('Repository owner or name is missing.');
+              return;
+            }
+            github.rest.issues.createComment({
+              owner: owner,
+              repo: repo,
+              issue_number: issue_number,
+              body: process.env.summary
+            })
+
+      - name: Display linting results
+        if: always()
+        run: |
+          echo "Linting completed. Check the Super-Linter output above for details."
+          echo "If there are any warnings or errors, please address them in your workflow files."

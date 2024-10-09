@@ -1,0 +1,423 @@
+---
+name: Reusable Terraform Workflow
+
+on:
+  workflow_call:
+    inputs:
+      runs_on: {type: string, description: 'JSON string defining the runner.', required: true}
+      check_tfstate_storage: {type: boolean, description: 'Run the check tfstate storage job', default: true}
+      tfstate_storage_script: {type: string, description: 'Path to the tfstate storage check script', default: './scripts/create-tfstate-storage.sh --checks-only'}
+      terraform_init_args: {type: string, description: 'Additional arguments for terraform init', default: ''}
+      terraform_plan_args: {type: string, description: 'Additional arguments for terraform plan', default: ''}
+      terraform_test_args: {type: string, description: 'Additional arguments for terraform test', default: ''}
+      terraform_checks_args: {type: string, description: 'Additional arguments for terraform checks', default: ''}
+      terraform_working_dir: {type: string, description: 'Working directory for Terraform commands', default: './terraform'}
+      push_plan_to_pr: {type: boolean, description: 'Push Terraform plan output to PR', default: true}
+      terraform_plan: {type: boolean, description: 'Enable Terraform plan step', default: false}
+      terraform_apply: {type: boolean, description: 'Enable Terraform apply step', default: false}
+      terraform_checks: {type: boolean, description: 'Enable Terraform check step', default: false}
+      terraform_format: {type: boolean, description: 'Enable Terraform format step', default: false}
+      terraform_tests: {type: boolean, description: 'Enable Terraform tests step', default: false}
+      terraform_validate: {type: boolean, description: 'Enable Terraform validate step', default: false}
+      environment_plan: {type: string, description: 'GitHub environment to use for plan', required: true}
+      environment_apply: {type: string, description: 'GitHub environment to use for apply', required: true}
+      tf_docs_enabled: {type: boolean, description: 'Generate Terraform docs', default: true}
+      tf_docs_output_file: {type: string, description: 'Output file for Terraform docs', default: 'README.md'}
+      tf_docs_config_file: {type: string, description: 'Config file for Terraform docs', default: '.terraform-docs.yml'}
+      arm_client_id: {type: string, description: 'Azure Client ID for OIDC authentication', required: true}
+      arm_tenant_id: {type: string, description: 'Azure Tenant ID for OIDC authentication', required: true}
+      arm_subscription_id: {type: string, description: 'Azure Subscription ID for OIDC authentication', required: true}
+      terraform_backend_resource_group: {type: string, required: true}
+      terraform_backend_location: {type: string, required: true}
+      terraform_backend_storage_account: {type: string, required: true}
+      terraform_backend_container: {type: string, required: true}
+      terraform_backend_sku: {type: string, required: true}
+      terraform_backend_env: {type: string, required: true}
+      terraform_backend_location_short: {type: string, required: true}
+      custom_backend_config: {type: string, description: 'Custom backend configuration (overrides default if provided)', required: false, default: ''}
+      use_artifactory_token: {type: boolean, default: false, description: 'Use Artifactory token or not'}
+    secrets:
+      GH_PAT: {required: true}
+      ARTIFACTORY_ACCESS_TOKEN: {required: false}
+      SECRET_VARIABLES_JSON: {description: 'JSON Key-Value pair of secrets to set Terraform Variables for.', required: false}
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  actions: read
+
+env:
+  TZ: "Europe/London"
+  ARM_USE_OIDC: true
+  ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
+  ARM_TENANT_ID: ${{ inputs.arm_tenant_id }}
+  ARM_SUBSCRIPTION_ID: ${{ inputs.arm_subscription_id }}
+  TERRAFORM_BACKEND_RESOURCE_GROUP: ${{ inputs.terraform_backend_resource_group }}
+  TERRAFORM_BACKEND_LOCATION: ${{ inputs.terraform_backend_location }}
+  TERRAFORM_BACKEND_STORAGE_ACCOUNT: ${{ inputs.terraform_backend_storage_account }}
+  TERRAFORM_BACKEND_CONTAINER: ${{ inputs.terraform_backend_container }}
+  TERRAFORM_BACKEND_SKU: ${{ inputs.terraform_backend_sku }}
+  TERRAFORM_BACKEND_ENV: ${{ inputs.terraform_backend_env }}
+  TERRAFORM_BACKEND_LOCATION_SHORT: ${{ inputs.terraform_backend_location_short }}
+
+jobs:
+  check-tfstate-storage:
+    name: 'check-backend'
+    if: ${{ inputs.check_tfstate_storage }}
+    runs-on: >-
+      ${{
+        (contains(inputs.runs_on, '{') && contains(inputs.runs_on, '}'))
+        && (fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on).labels || fromJSON(inputs.runs_on).group)
+        || inputs.runs_on
+      }}
+    environment: ${{ inputs.environment_plan }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+      - name: Run tfstate Storage Check
+        run: bash ${{ inputs.tfstate_storage_script }}
+
+  terraform-docs:
+    name: 'docs'
+    if: inputs.tf_docs_enabled
+    runs-on: >-
+      ${{
+        (contains(inputs.runs_on, '{') && contains(inputs.runs_on, '}'))
+        && (fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on).labels || fromJSON(inputs.runs_on).group)
+        || inputs.runs_on
+      }}
+    steps:
+      - name: Determine branch name
+        id: set-branch
+        env:
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          if [[ "${{ github.event_name }}" == 'pull_request' ]]; then
+            echo "branch_name=${GITHUB_HEAD_REF}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
+            echo "branch_name=${{ github.event.inputs.branch }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "branch_name=${GITHUB_REF#refs/heads/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clear workspace
+        run: |
+          sudo rm -rf .git
+          git init
+          sudo chmod -R 777 .git
+
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: true
+          persist-credentials: true
+          token: ${{ secrets.GH_PAT }}
+          ref: ${{ steps.set-branch.outputs.branch_name }}
+
+      - name: Checkout reusable-workflow repository
+        uses: actions/checkout@v4
+        with:
+          repository: bank-of-england-technology/alz-reusable-workflows
+          path: ./alz-reusable-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Generate Terraform Docs
+        uses: ./alz-reusable-workflows/.github/actions/terraform-docs
+        with:
+          working_directory: ${{ inputs.terraform_working_dir }}
+          output_file: ${{ inputs.tf_docs_output_file }}
+          config_file: ${{ inputs.tf_docs_config_file }}
+
+  terraform-plan:
+    name: 'plan'
+    if: inputs.terraform_plan
+    needs: check-tfstate-storage
+    runs-on: >-
+      ${{
+        (contains(inputs.runs_on, '{') && contains(inputs.runs_on, '}'))
+        && (fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on).labels || fromJSON(inputs.runs_on).group)
+        || inputs.runs_on
+      }}
+    environment: ${{ inputs.environment_plan }}
+    outputs:
+      tfplanExitCode: ${{ steps.tf_plan.outputs.exitcode }}
+    steps:
+      - name: Setup Git credentials
+        run: |
+         git config --global url."https://oauth2:${{ secrets.GH_PAT }}@github.com".insteadOf "ssh://git@github.com"
+
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Checkout reusable-workflow repository
+        uses: actions/checkout@v4
+        with:
+          repository: bank-of-england-technology/alz-reusable-workflows
+          path: ./alz-reusable-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      - name: Construct Backend Config
+        id: backend_config
+        run: |
+          if [ -n "${{ inputs.custom_backend_config }}" ]; then
+            echo "config=${{ inputs.custom_backend_config }}" >> "$GITHUB_OUTPUT"
+          else
+            DEFAULT_CONFIG="-backend-config=\"container_name=${{ inputs.terraform_backend_container }}\" \
+            -backend-config=\"key=${{ inputs.terraform_backend_container }}-${{ inputs.terraform_backend_location_short }}-${{ inputs.terraform_backend_env }}.tfstate\" \
+            -backend-config=\"storage_account_name=${{ inputs.terraform_backend_storage_account }}\" \
+            -backend-config=\"resource_group_name=${{ inputs.terraform_backend_resource_group }}\""
+            echo "config=$DEFAULT_CONFIG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform Format
+        if: inputs.terraform_format
+        uses: ./alz-reusable-workflows/.github/actions/terraform-operations
+        with:
+          working_directory: ${{ inputs.terraform_working_dir }}
+          operation: 'format'
+
+      - name: Terraform Init
+        uses: ./alz-reusable-workflows/.github/actions/terraform-operations
+        env:
+          TF_VAR_artifactory_access_token: ${{ inputs.use_artifactory_token == true && secrets.ARTIFACTORY_ACCESS_TOKEN || '' }}
+        with:
+          working_directory: ${{ inputs.terraform_working_dir }}
+          backend_config: ${{ steps.backend_config.outputs.config }}
+          init_args: ${{ inputs.terraform_init_args }}
+          operation: 'init'
+
+      - name: Terraform Validate
+        if: inputs.terraform_validate
+        uses: ./alz-reusable-workflows/.github/actions/terraform-operations
+        with:
+          working_directory: ${{ inputs.terraform_working_dir }}
+          operation: 'validate'
+
+      - name: Terraform Test
+        id: tf_test
+        uses: ./alz-reusable-workflows/.github/actions/terraform-operations
+        if: inputs.terraform_tests
+        env:
+          TF_VAR_artifactory_access_token: ${{ inputs.use_artifactory_token == true && secrets.ARTIFACTORY_ACCESS_TOKEN || '' }}
+        with:
+          working_directory: "${{ inputs.terraform_working_dir }}"
+          test_args: "-test-directory='./unit-test-directory' ${{ inputs.terraform_test_args }}"
+          operation: 'test'
+          secret_variables_json: ${{ secrets.SECRET_VARIABLES_JSON }}
+
+
+      - name: Terraform Plan
+        id: tf_plan
+        uses: ./alz-reusable-workflows/.github/actions/terraform-operations
+        env:
+          TF_VAR_artifactory_access_token: ${{ inputs.use_artifactory_token == true && secrets.ARTIFACTORY_ACCESS_TOKEN || '' }}
+        with:
+          working_directory: ${{ inputs.terraform_working_dir }}
+          plan_args: ${{ inputs.terraform_plan_args }}
+          operation: 'plan'
+          secret_variables_json: ${{ secrets.SECRET_VARIABLES_JSON }}
+
+      - name: Publish Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ inputs.terraform_working_dir }}/tfplan
+
+      - name: Create String Output
+        id: tf-plan-string
+        run: |
+          TERRAFORM_PLAN=$(terraform -chdir="${{ inputs.terraform_working_dir }}" show -no-color tfplan)
+
+          delimiter="$(openssl rand -hex 8)"
+          {
+            echo "summary<<${delimiter}"
+            echo "## Terraform Plan Output"
+            echo "<details><summary>Click to expand</summary>"
+            echo ""
+            echo '```terraform'
+            echo "$TERRAFORM_PLAN" | tail -c 60000
+            echo '```'
+            echo "</details>"
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish Terraform Plan to Task Summary
+        env:
+          SUMMARY: ${{ steps.tf-plan-string.outputs.summary }}
+        run: |
+          echo "[INFO]: Maybe truncated if too long! $SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Push Terraform Output to PR
+        if: ${{ inputs.push_plan_to_pr && github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        env:
+          SUMMARY: "${{ steps.tf-plan-string.outputs.summary }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body = `${process.env.SUMMARY}`;
+            const issueNumber = context.issue.number;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            github.rest.issues.createComment({
+                issue_number: issueNumber,
+                owner: owner,
+                repo: repo,
+                body: body
+            });
+
+  terraform-apply:
+    name: 'apply'
+    needs: terraform-plan
+    if: |
+      inputs.terraform_apply &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.terraform-plan.outputs.tfplanExitCode == 2
+    runs-on: >-
+      ${{
+        (contains(inputs.runs_on, '{') && contains(inputs.runs_on, '}'))
+        && (fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on).labels || fromJSON(inputs.runs_on).group)
+        || inputs.runs_on
+      }}
+    environment: ${{ inputs.environment_apply }}
+    steps:
+      - name: Setup Git credentials
+        run: |
+          git config --global url."https://oauth2:${{ secrets.GH_PAT }}@github.com".insteadOf "ssh://git@github.com"
+
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Checkout reusable-workflow repository
+        uses: actions/checkout@v4
+        with:
+          repository: bank-of-england-technology/alz-reusable-workflows
+          path: ./alz-reusable-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ inputs.terraform_working_dir }}
+
+      - name: Construct Backend Config
+        id: backend_config
+        run: |
+          if [ -n "${{ inputs.custom_backend_config }}" ]; then
+            echo "config=${{ inputs.custom_backend_config }}" >> "$GITHUB_OUTPUT"
+          else
+            DEFAULT_CONFIG="-backend-config=\"container_name=${{ inputs.terraform_backend_container }}\" \
+            -backend-config=\"key=${{ inputs.terraform_backend_container }}-${{ inputs.terraform_backend_location_short }}-${{ inputs.terraform_backend_env }}.tfstate\" \
+            -backend-config=\"storage_account_name=${{ inputs.terraform_backend_storage_account }}\" \
+            -backend-config=\"resource_group_name=${{ inputs.terraform_backend_resource_group }}\""
+            echo "config=$DEFAULT_CONFIG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform Init
+        uses: ./alz-reusable-workflows/.github/actions/terraform-operations
+        env:
+          TF_VAR_artifactory_access_token: ${{ inputs.use_artifactory_token == true && secrets.ARTIFACTORY_ACCESS_TOKEN || '' }}
+        with:
+          working_directory: ${{ inputs.terraform_working_dir }}
+          backend_config: ${{ steps.backend_config.outputs.config }}
+          init_args: ${{ inputs.terraform_init_args }}
+          operation: 'init'
+
+      - name: Terraform Apply
+        uses: ./alz-reusable-workflows/.github/actions/terraform-operations
+        env:
+          TF_VAR_artifactory_access_token: ${{ inputs.use_artifactory_token == true && secrets.ARTIFACTORY_ACCESS_TOKEN || '' }}
+        with:
+          working_directory: ${{ inputs.terraform_working_dir }}
+          operation: 'apply'
+          secret_variables_json: ${{ secrets.SECRET_VARIABLES_JSON }}
+
+  terraform-checks:
+    name: 'checks'
+    needs: terraform-apply
+    if: inputs.terraform_checks
+    runs-on: >-
+      ${{
+        (contains(inputs.runs_on, '{') && contains(inputs.runs_on, '}'))
+        && (fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on).labels || fromJSON(inputs.runs_on).group)
+        || inputs.runs_on
+      }}
+    environment: ${{ inputs.environment_plan }}
+    steps:
+      - name: Setup Git credentials
+        run: |
+          git config --global url."https://oauth2:${{ secrets.GH_PAT }}@github.com".insteadOf ssh://git@github.com
+
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Checkout reusable-workflow repository
+        uses: actions/checkout@v4
+        with:
+          repository: bank-of-england-technology/alz-reusable-workflows
+          path: ./alz-reusable-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      - name: Terraform Checks Init
+        uses: ./alz-reusable-workflows/.github/actions/terraform-operations
+        env:
+          TF_VAR_artifactory_access_token: ${{ inputs.use_artifactory_token == true && secrets.ARTIFACTORY_ACCESS_TOKEN || '' }}
+        with:
+          working_directory: "${{ inputs.terraform_working_dir }}/checks-test-directory"
+          init_args: ${{ inputs.terraform_init_args }}
+          operation: 'init'
+
+      - name: Terraform Checks Apply
+        uses: ./alz-reusable-workflows/.github/actions/terraform-operations
+        env:
+          TF_VAR_artifactory_access_token: ${{ inputs.use_artifactory_token == true && secrets.ARTIFACTORY_ACCESS_TOKEN || '' }}
+        with:
+          working_directory: "${{ inputs.terraform_working_dir }}/checks-test-directory"
+          operation: 'check'
+          checks_args: ${{ inputs.terraform_checks_args }}
+          secret_variables_json: ${{ secrets.SECRET_VARIABLES_JSON }}
+
+      - name: Validate Checks Output
+        uses: ./alz-reusable-workflows/.github/actions/terraform-checks-output
+        with:
+          state_file_path: "${{ inputs.terraform_working_dir }}/checks-test-directory/terraform.tfstate"
