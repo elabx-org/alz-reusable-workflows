@@ -17,12 +17,13 @@ permissions:
 jobs:
   lint:
     name: 'lint-workflows-actions-scripts'
-    runs-on: >-
-      ${{
-        (contains(vars.RUNNER_CONFIG, '{') && contains(vars.RUNNER_CONFIG, '}'))
-        && (fromJSON(vars.RUNNER_CONFIG).runner || fromJSON(vars.RUNNER_CONFIG).labels)
-        || vars.RUNNER_CONFIG
-      }}
+    runs-on: ubuntu-latest
+    # runs-on: >-
+    #   ${{
+    #     (contains(vars.RUNNER_CONFIG, '{') && contains(vars.RUNNER_CONFIG, '}'))
+    #     && (fromJSON(vars.RUNNER_CONFIG).runner || fromJSON(vars.RUNNER_CONFIG).labels)
+    #     || vars.RUNNER_CONFIG
+    #   }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
