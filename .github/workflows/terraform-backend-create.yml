@@ -29,7 +29,7 @@ permissions:
   contents: write
   pull-requests: write
   actions: read
-  
+
 jobs:
   create-tfstate-storage:
     runs-on: ubuntu-latest
@@ -70,6 +70,7 @@ jobs:
           UPDATE_BLOB_POLICIES: ${{ inputs.update_blob_policies }}
           UPDATE_CONTAINER_POLICIES: ${{ inputs.update_container_policies }}
           SETUP_AZURE_BACKUP: ${{ inputs.setup_azure_backup }}
+          ARM_USE_OIDC: true
         run: |
           bash create-tf-backend.sh
 
