@@ -40,6 +40,7 @@ jobs:
         with:
           repository: elabx-org/alz-reusable-workflows
           path: alz-reusable-workflows
+          fetch-depth: 0
           ref: main
       - name: Debug - List directory contents
         run: |
