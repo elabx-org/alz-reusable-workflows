@@ -24,6 +24,12 @@ on:
       ARM_SUBSCRIPTION_ID: {required: true}
       ARM_CLIENT_ID: {required: true}
 
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  actions: read
+  
 jobs:
   create-tfstate-storage:
     runs-on: ubuntu-latest
