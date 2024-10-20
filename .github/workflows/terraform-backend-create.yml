@@ -72,7 +72,7 @@ jobs:
           SETUP_AZURE_BACKUP: ${{ inputs.setup_azure_backup }}
           ARM_USE_OIDC: true
         run: |
-          bash create-tf-backend.sh
+          bash /scripts/create-tf-backend.sh
 
       - name: Azure Logout
         if: always()
