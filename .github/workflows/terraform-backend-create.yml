@@ -1,0 +1,75 @@
+name: 'Reusable Workflow - Create TFState Storage'
+
+on:
+  workflow_call:
+    inputs:
+      environment: {required: true, type: string}
+      subnet_ids: {required: false, type: string, default: ''}
+      run_resource_provider_check: {required: false, type: boolean, default: true}
+      run_resource_group_check: {required: false, type: boolean, default: true}
+      run_storage_account_check: {required: false, type: boolean, default: true}
+      run_network_rules_check: {required: false, type: boolean, default: true}
+      run_blob_properties_check: {required: false, type: boolean, default: true}
+      run_container_properties_check: {required: false, type: boolean, default: true}
+      run_backup_checks: {required: false, type: boolean, default: true}
+      create_resource_group: {required: false, type: boolean, default: true}
+      create_storage_account: {required: false, type: boolean, default: true}
+      update_network_rules: {required: false, type: boolean, default: false}
+      create_container: {required: false, type: boolean, default: true}
+      update_blob_policies: {required: false, type: boolean, default: true}
+      update_container_policies: {required: false, type: boolean, default: true}
+      setup_azure_backup: {required: false, type: boolean, default: true}
+    secrets:
+      ARM_TENANT_ID: {required: true}
+      ARM_SUBSCRIPTION_ID: {required: true}
+      ARM_CLIENT_ID: {required: true}
+
+jobs:
+  create-tfstate-storage:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - name: Create TFState Storage
+        env:
+          TERRAFORM_BACKEND_RESOURCE_GROUP: ${{ vars.TF_BACKEND_SA_RG }}
+          TERRAFORM_BACKEND_STORAGE_ACCOUNT: ${{ vars.TF_BACKEND_SA }}
+          TERRAFORM_BACKEND_CONTAINER: ${{ vars.TF_BACKEND_SA_CONTAINER }}
+          TERRAFORM_BACKEND_LOCATION: ${{ vars.TF_BACKEND_SA_REGION }}
+          TERRAFORM_BACKEND_LOCATION_SHORT: ${{ vars.TF_BACKEND_SA_REGION_SHORT }}
+          TERRAFORM_BACKEND_SKU: ${{ vars.TF_BACKEND_SA_SKU }}
+          TERRAFORM_BACKEND_ENV: ${{ vars.TF_BACKEND_ENV }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          SUBNET_IDS: ${{ inputs.subnet_ids }}
+          RUN_RESOURCE_PROVIDER_CHECK: ${{ inputs.run_resource_provider_check }}
+          RUN_RESOURCE_GROUP_CHECK: ${{ inputs.run_resource_group_check }}
+          RUN_STORAGE_ACCOUNT_CHECK: ${{ inputs.run_storage_account_check }}
+          RUN_NETWORK_RULES_CHECK: ${{ inputs.run_network_rules_check }}
+          RUN_BLOB_PROPERTIES_CHECK: ${{ inputs.run_blob_properties_check }}
+          RUN_CONTAINER_PROPERTIES_CHECK: ${{ inputs.run_container_properties_check }}
+          RUN_BACKUP_CHECKS: ${{ inputs.run_backup_checks }}
+          CREATE_RESOURCE_GROUP: ${{ inputs.create_resource_group }}
+          CREATE_STORAGE_ACCOUNT: ${{ inputs.create_storage_account }}
+          UPDATE_NETWORK_RULES: ${{ inputs.update_network_rules }}
+          CREATE_CONTAINER: ${{ inputs.create_container }}
+          UPDATE_BLOB_POLICIES: ${{ inputs.update_blob_policies }}
+          UPDATE_CONTAINER_POLICIES: ${{ inputs.update_container_policies }}
+          SETUP_AZURE_BACKUP: ${{ inputs.setup_azure_backup }}
+        run: |
+          bash create-tf-backend.sh
+
+      - name: Azure Logout
+        if: always()
+        run: |
+          az logout
+          az cache purge
+          az account clear
