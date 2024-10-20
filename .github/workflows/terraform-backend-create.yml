@@ -40,6 +40,10 @@ jobs:
         with:
           repository: elabx-org/alz-reusable-workflows
           path: alz-reusable-workflows
+          ref: main
+      - name: Debug - List directory contents
+        run: |
+          ls -R alz-reusable-workflows
 
       - name: Azure Login
         uses: azure/login@v2
