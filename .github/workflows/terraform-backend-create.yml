@@ -19,6 +19,7 @@ on:
       update_blob_policies: {required: false, type: boolean, default: true}
       update_container_policies: {required: false, type: boolean, default: true}
       setup_azure_backup: {required: false, type: boolean, default: true}
+      checks_only: {required: false, type: boolean, default: false}
     secrets:
       ARM_TENANT_ID: {required: true}
       ARM_SUBSCRIPTION_ID: {required: true}
@@ -81,7 +82,11 @@ jobs:
           ARM_USE_OIDC: true
         run: |
           cd alz-reusable-workflows/scripts
-          bash create-tf-backend.sh
+          if [ "${{ inputs.checks_only }}" = "true" ]; then
+            bash create-tf-backend.sh --checks-only
+          else
+            bash create-tf-backend.sh
+          fi
 
       - name: Azure Logout
         if: always()
