@@ -35,7 +35,7 @@ on:
 
 jobs:
   release-module:
-    uses: bank-of-england-technology/alz-reusable-workflows/.github/workflows/mod-validate-and-release.yml@main
+    uses: elabx-org/alz-reusable-workflows/.github/workflows/mod-validate-and-release.yml@main
     with:
       runs_on: >-
         ${{ vars.RUNNER_CONFIG || 
