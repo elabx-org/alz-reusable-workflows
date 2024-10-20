@@ -1,0 +1,105 @@
+name: Release and Tag
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      increment:
+        description: |
+          Version increment type:
+          ┌─────────────────────────────────────────┐
+          │ patch: 1.0.0 -------→ 1.0.1 [bug fixes] │
+          ├─────────────────────────────────────────┤
+          │ minor: 1.0.0 ----→ 1.1.0 [new features] │
+          ├─────────────────────────────────────────┤
+          │ major: 1.0.0 → 2.0.0 [breaking changes] │
+          └─────────────────────────────────────────┘
+          (default: patch)
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      force_release:
+        description: 'Force release creation (no code changes)'
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  release-module:
+    uses: elabx-org/alz-reusable-workflows/.github/workflows/mod-validate-and-release.yml@main
+    with:
+      runs_on: >-
+        ${{ vars.RUNNER_CONFIG || 
+        '{"group": "replacesvcs", "labels": ["self-hosted", "prod", "linuxdefender"]}' }}                            
+      increment: ${{ github.event.inputs.increment || vars.DEFAULT_INCREMENT || 'patch' }}
+      force_release: ${{ fromJSON(github.event.inputs.force_release || 'false') }}
+      install_gh_cli: ${{ fromJSON(vars.INSTALL_GH_CLI != null && vars.INSTALL_GH_CLI || 'true') }}
+      terraform_working_dir: ${{ vars.TERRAFORM_WORKING_DIR || '.' }}
+      
+      # Job execution controls
+      run_check_tf_changes: ${{ fromJSON(vars.RUN_CHECK_TF_CHANGES != null && vars.RUN_CHECK_TF_CHANGES || 'false') }}                                          
+      run_validate_module: ${{ fromJSON(vars.RUN_VALIDATE_MODULE != null && vars.RUN_VALIDATE_MODULE || 'false') }}                                         
+      run_tf_docs: ${{ fromJSON(vars.RUN_TF_DOCS != null && vars.RUN_TF_DOCS || 'false') }}                                                      
+      run_release_and_tag: ${{ fromJSON(vars.RUN_RELEASE_AND_TAG != null && vars.RUN_RELEASE_AND_TAG || 'true') }}                     
+      
+      # Terraform docs settings
+      tf_docs_output_file: ${{ vars.TF_DOCS_OUTPUT_FILE || 'README.md' }}                
+      tf_docs_config_file: ${{ vars.TF_DOCS_CONFIG_FILE || '.terraform-docs.yml' }}          
+      tf_docs_clear_workspace: ${{ fromJSON(vars.TF_DOCS_CLEAR_WORKSPACE != null && vars.TF_DOCS_CLEAR_WORKSPACE || 'true') }}    
+
+ 
+
+# =====================================================================
+# INFO
+# =====================================================================
+#
+# Runner Configuration:
+# - To use GitHub-hosted runner: {"runner": "ubuntu-latest"}
+# - To use self-hosted runner: {"group": "replacesvcs", "labels": ["self-hosted", "prod", "linuxdefender"]}
+#
+# GitHub Repository Variables:
+# - Set these in your repo: Settings > Secrets and variables > Actions > Variables
+# - Available variables, their purpose, and default values:
+#   - RUNNER_CONFIG: JSON string for runner configuration
+#     Default: '{"group": "replacesvcs", "labels": ["self-hosted", "prod", "linuxdefender"]}'
+#   - DEFAULT_INCREMENT: Default version increment type
+#     Default: 'patch'
+#   - FORCE_RELEASE: Whether to force a release creation
+#     Default: false, not configurable via repository variables
+#   - INSTALL_GH_CLI: Whether to install GitHub CLI
+#     Default: true
+#   - TERRAFORM_WORKING_DIR: Set the Terraform working directory
+#     Default: '.' (current directory)
+#   - RUN_CHECK_TF_CHANGES: Whether to run Terraform change check
+#     Default: false
+#   - RUN_VALIDATE_MODULE: Whether to run Terraform validation
+#     Default: false
+#   - RUN_TF_DOCS: Whether to generate Terraform docs
+#     Default: true
+#   - RUN_RELEASE_AND_TAG: Whether to create release and tag
+#     Default: true
+#   - TF_DOCS_OUTPUT_FILE: Set the output file for Terraform docs
+#     Default: 'README.md'
+#   - TF_DOCS_CONFIG_FILE: Set the config file for Terraform docs
+#     Default: '.terraform-docs.yml'
+#   - TF_DOCS_CLEAR_WORKSPACE: Whether to clear workspace before generating docs
+#     Default: true
+#
+# Workflow Dispatch Inputs:
+# - increment: Choose version increment type (patch, minor, major)
+#   Default: 'patch'
+# - force_release: Force release creation even without changes
+#   Default: false
+#
+# Note: Repository variables take precedence over default values in the workflow.
+#       Use these to customize behavior without changing the workflow file.
+#
