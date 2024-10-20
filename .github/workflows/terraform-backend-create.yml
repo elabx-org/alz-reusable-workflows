@@ -37,6 +37,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          repository: elabx-org/alz-reusable-workflows
+          path: alz-reusable-workflows
 
       - name: Azure Login
         uses: azure/login@v2
@@ -72,7 +75,8 @@ jobs:
           SETUP_AZURE_BACKUP: ${{ inputs.setup_azure_backup }}
           ARM_USE_OIDC: true
         run: |
-          bash /scripts/create-tf-backend.sh
+          cd alz-reusable-workflows/scripts
+          bash create-tf-backend.sh
 
       - name: Azure Logout
         if: always()
