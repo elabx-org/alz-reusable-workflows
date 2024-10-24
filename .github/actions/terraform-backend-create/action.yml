@@ -1,0 +1,77 @@
+name: 'Create TFState Storage Action'
+description: 'Creates and configures Azure Storage Account for Terraform state'
+
+inputs:
+  environment: { description: 'Environment name', required: true }
+  subnet_ids: { description: 'Comma-separated list of subnet IDs', required: false, default: '' }
+  run_resource_provider_check: { description: 'Run resource provider registration check', required: false, default: 'true' }
+  run_resource_group_check: { description: 'Run resource group check', required: false, default: 'true' }
+  run_storage_account_check: { description: 'Run storage account check', required: false, default: 'true' }
+  run_network_rules_check: { description: 'Run network rules check', required: false, default: 'true' }
+  run_blob_properties_check: { description: 'Run blob properties check', required: false, default: 'true' }
+  run_container_properties_check: { description: 'Run container properties check', required: false, default: 'true' }
+  run_backup_checks: { description: 'Run backup checks', required: false, default: 'true' }
+  create_resource_group: { description: 'Create resource group', required: false, default: 'true' }
+  create_storage_account: { description: 'Create storage account', required: false, default: 'true' }
+  update_network_rules: { description: 'Update network rules', required: false, default: 'false' }
+  create_container: { description: 'Create container', required: false, default: 'true' }
+  update_blob_policies: { description: 'Update blob policies', required: false, default: 'true' }
+  update_container_policies: { description: 'Update container policies', required: false, default: 'true' }
+  setup_azure_backup: { description: 'Setup Azure backup', required: false, default: 'true' }
+  checks_only: { description: 'Run checks only', required: false, default: 'false' }
+  client_id: { description: 'Azure Client ID', required: true }
+  tenant_id: { description: 'Azure Tenant ID', required: true }
+  subscription_id: { description: 'Azure Subscription ID', required: true }
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        repository: elabx-org/alz-reusable-workflows
+        path: alz-reusable-workflows
+        fetch-depth: 0
+        ref: main
+
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.client_id }}
+        tenant-id: ${{ inputs.tenant_id }}
+        subscription-id: ${{ inputs.subscription_id }}
+
+    - name: Create TFState Storage
+      shell: bash
+      env:
+        TERRAFORM_BACKEND_RESOURCE_GROUP: ${{ vars.TF_BACKEND_SA_RG }}
+        TERRAFORM_BACKEND_STORAGE_ACCOUNT: ${{ vars.TF_BACKEND_SA }}
+        TERRAFORM_BACKEND_CONTAINER: ${{ vars.TF_BACKEND_SA_CONTAINER }}
+        TERRAFORM_BACKEND_LOCATION: ${{ vars.TF_BACKEND_SA_REGION }}
+        TERRAFORM_BACKEND_LOCATION_SHORT: ${{ vars.TF_BACKEND_SA_REGION_SHORT }}
+        TERRAFORM_BACKEND_SKU: ${{ vars.TF_BACKEND_SA_SKU }}
+        TERRAFORM_BACKEND_ENV: ${{ vars.TF_BACKEND_ENV }}
+        ARM_SUBSCRIPTION_ID: ${{ inputs.subscription_id }}
+        SUBNET_IDS: ${{ inputs.subnet_ids }}
+        RUN_RESOURCE_PROVIDER_CHECK: ${{ inputs.run_resource_provider_check }}
+        RUN_RESOURCE_GROUP_CHECK: ${{ inputs.run_resource_group_check }}
+        RUN_STORAGE_ACCOUNT_CHECK: ${{ inputs.run_storage_account_check }}
+        RUN_NETWORK_RULES_CHECK: ${{ inputs.run_network_rules_check }}
+        RUN_BLOB_PROPERTIES_CHECK: ${{ inputs.run_blob_properties_check }}
+        RUN_CONTAINER_PROPERTIES_CHECK: ${{ inputs.run_container_properties_check }}
+        RUN_BACKUP_CHECKS: ${{ inputs.run_backup_checks }}
+        CREATE_RESOURCE_GROUP: ${{ inputs.create_resource_group }}
+        CREATE_STORAGE_ACCOUNT: ${{ inputs.create_storage_account }}
+        UPDATE_NETWORK_RULES: ${{ inputs.update_network_rules }}
+        CREATE_CONTAINER: ${{ inputs.create_container }}
+        UPDATE_BLOB_POLICIES: ${{ inputs.update_blob_policies }}
+        UPDATE_CONTAINER_POLICIES: ${{ inputs.update_container_policies }}
+        SETUP_AZURE_BACKUP: ${{ inputs.setup_azure_backup }}
+        ARM_USE_OIDC: true
+      run: |
+        cd alz-reusable-workflows/scripts
+        if [ "${{ inputs.checks_only }}" = "true" ]; then
+          ${{ github.action_path }}/scripts/create-tf-backend.sh --checks-only
+        else
+          bash create-tf-backend.sh
+        fi
