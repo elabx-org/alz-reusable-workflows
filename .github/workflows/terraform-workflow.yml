@@ -126,7 +126,7 @@ jobs:
       - name: Checkout reusable-workflow repository
         uses: actions/checkout@v4
         with:
-          repository: bank-of-england-technology/alz-reusable-workflows
+          repository: elabx-org/alz-reusable-workflows
           path: ./alz-reusable-workflows
           ref: main
           token: ${{ secrets.GH_PAT }}
@@ -163,7 +163,7 @@ jobs:
       - name: Checkout reusable-workflow repository
         uses: actions/checkout@v4
         with:
-          repository: bank-of-england-technology/alz-reusable-workflows
+          repository: elabx-org/alz-reusable-workflows
           path: ./alz-reusable-workflows
           ref: main
           token: ${{ secrets.GH_PAT }}
@@ -312,7 +312,7 @@ jobs:
       - name: Checkout reusable-workflow repository
         uses: actions/checkout@v4
         with:
-          repository: bank-of-england-technology/alz-reusable-workflows
+          repository: elabx-org/alz-reusable-workflows
           path: ./alz-reusable-workflows
           ref: main
           token: ${{ secrets.GH_PAT }}
@@ -385,7 +385,7 @@ jobs:
       - name: Checkout reusable-workflow repository
         uses: actions/checkout@v4
         with:
-          repository: bank-of-england-technology/alz-reusable-workflows
+          repository: elabx-org/alz-reusable-workflows
           path: ./alz-reusable-workflows
           ref: main
           token: ${{ secrets.GH_PAT }}
