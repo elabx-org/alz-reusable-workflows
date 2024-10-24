@@ -36,11 +36,16 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
-      - name: Checkout
+      - name: Checkout Action Repository
         uses: actions/checkout@v4
+        with:
+          repository: elabx-org/alz-reusable-workflows
+          path: alz-reusable-workflows
+          fetch-depth: 0
+          ref: main
 
       - name: Create TFState Storage
-        uses: ./.github/actions/terraform-backend-create
+        uses: ./alz-reusable-workflows/.github/actions/terraform-backend-create
         with:
           environment: ${{ inputs.environment }}
           subnet_ids: ${{ inputs.subnet_ids }}
