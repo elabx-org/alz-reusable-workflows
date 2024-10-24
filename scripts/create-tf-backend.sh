@@ -32,8 +32,8 @@ SETUP_AZURE_BACKUP=${SETUP_AZURE_BACKUP:-true}
 
 # Default subnet IDs
 default_subnet_ids=(
-    "/subscriptions/redacted_sub_ids/resourceGroups/rg-vnet_spoke_shared_services_defender-yrbj/providers/Microsoft.Network/virtualNetworks/vnet-shared_services_network_1_defender-jthq/subnets/snet-aks_defender_nodepool_system-isxr" 
-    "/subscriptions/redacted_sub_ids/resourceGroups/rg-vnet_spoke_shared_services_defender-yrbj/providers/Microsoft.Network/virtualNetworks/vnet-shared_services_network_1_defender-jthq/subnets/snet-aks_defender_nodepool_user1-yegu"
+    "/subscriptions/redacted_sub_id/resourceGroups/rg-vnet_spoke_shared_services_defender-yrbj/providers/Microsoft.Network/virtualNetworks/vnet-shared_services_network_1_defender-jthq/subnets/snet-aks_defender_nodepool_system-isxr" # new bank runners
+    "/subscriptions/redacted_sub_id/resourceGroups/rg-vnet_spoke_shared_services_defender-yrbj/providers/Microsoft.Network/virtualNetworks/vnet-shared_services_network_1_defender-jthq/subnets/snet-aks_defender_nodepool_user1-yegu" # new bank runners
 )
 
 # Use custom subnet IDs if provided, otherwise use default
@@ -49,6 +49,26 @@ POLICY_FILE="backup-policy.json"
 BACKUP_VAULT_NAME="bvault-${SVC_NAME}-${ENV_SHORT}-${BACKUP_USE}-${LOCATION_SHORT}-001"
 BACKUP_POLICY_NAME="bkpol-${SVC_NAME}-${ENV_SHORT}-${BACKUP_USE}-${LOCATION_SHORT}-001"
 BACKUP_INSTANCE_NAME="bki-${SVC_NAME}-${ENV_SHORT}-${BACKUP_USE}-${LOCATION_SHORT}-001"
+
+## Determine storage setting based on location
+if [[ "$LOCATION" == "UKWest" || "$LOCATION_SHORT" == "ukw" ]]; then
+    STORAGE_SETTING="[{'type':'LocallyRedundant','datastore-type':'VaultStore'}]"
+elif [[ "$LOCATION" == "UKSouth" || "$LOCATION_SHORT" == "uks" ]]; then
+    STORAGE_SETTING="[{'type':'ZoneRedundant','datastore-type':'VaultStore'}]"
+else
+    echo "[ERROR]: Unsupported location $LOCATION"
+    exit 1
+fi
+
+# Read backup-instance-template.json & substitute the variables
+sed -e "s/\${SUBSCRIPTION_ID}/${SUBSCRIPTION_ID}/g" \
+    -e "s/\${RESOURCE_GROUP}/${RESOURCE_GROUP}/g" \
+    -e "s/\${LOCATION}/${LOCATION}/g" \
+    -e "s/\${STORAGE_ACCOUNT}/${STORAGE_ACCOUNT}/g" \
+    -e "s/\${BACKUP_VAULT_NAME}/${BACKUP_VAULT_NAME}/g" \
+    -e "s/\${BACKUP_POLICY_NAME}/${BACKUP_POLICY_NAME}/g" \
+    -e "s/\${BACKUP_INSTANCE_NAME}/${BACKUP_INSTANCE_NAME}/g" \
+    backup-instance-template.json > backup-instance.json
 
 # Logging function
 log() {
@@ -219,13 +239,69 @@ perform_checks() {
 
 # Function to perform backup checks
 perform_checks_backup() {
-    if $RUN_BACKUP_CHECKS; then
-        log "INFO" "Performing backup checks..."
-        # Implementation of backup checks goes here
-        # This function should check for the existence of the Backup Vault, policy, and protection status
-        # Return 0 if all checks pass, 1 otherwise
+  if $RUN_BACKUP_CHECKS; then
+      log "INFO" "Performing backup checks..."
+      local all_checks_passed=true
+
+      # Install the dataprotection extension
+      ensure_dataprotection_extension
+
+      # Check if the backup vault exists
+      log "INFO" "Checking if Backup Vault $BACKUP_VAULT_NAME exists..."
+      if az dataprotection backup-vault show --vault-name $BACKUP_VAULT_NAME --resource-group $RESOURCE_GROUP &>/dev/null; then
+          log "INFO" "Backup Vault '$BACKUP_VAULT_NAME' exists"
+      else
+          log "ERROR" "Backup Vault '$BACKUP_VAULT_NAME' does not exist"
+          all_checks_passed=false
+          if [[ "$1" == "--checks-only" ]]; then return 1; fi
+      fi
+
+      # Check if the backup policy exists
+      log "INFO" "Checking if Backup Policy $BACKUP_POLICY_NAME exists..."
+      if az dataprotection backup-policy show --resource-group $RESOURCE_GROUP --vault-name $BACKUP_VAULT_NAME --name $BACKUP_POLICY_NAME &>/dev/null; then
+          log "INFO" "Backup Policy '$BACKUP_POLICY_NAME' exists"
+      else
+          log "ERROR" "Backup Policy '$BACKUP_POLICY_NAME' does not exist"
+          all_checks_passed=false
+          if [[ "$1" == "--checks-only" ]]; then return 1; fi
+      fi
+
+      # Check if Storage Account Backup Contributor role is assigned
+      log "INFO" "Checking Storage Account Backup Contributor role assignment..."
+      local vault_object_id=$(az dataprotection backup-vault show --vault-name $BACKUP_VAULT_NAME --resource-group $RESOURCE_GROUP --query identity.principalId --output tsv)
+      if az role assignment list --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}" --query "[?principalId=='${vault_object_id}' && roleDefinitionName=='Storage Account Backup Contributor']" -o tsv | grep -q "Storage Account Backup Contributor"; then
+          log "INFO" "Storage Account Backup Contributor role is properly assigned"
+      else
+          log "ERROR" "Storage Account Backup Contributor role is not assigned"
+          all_checks_passed=false
+          if [[ "$1" == "--checks-only" ]]; then return 1; fi
+      fi
+
+      # Check if Azure Backup for Blobs is enabled
+      log "INFO" "Checking Azure Backup status for storage account $STORAGE_ACCOUNT..."
+      local backup_instance=$(az dataprotection backup-instance list \
+          --resource-group "$RESOURCE_GROUP" \
+          --vault-name "$BACKUP_VAULT_NAME" \
+          --query "[?name=='$BACKUP_INSTANCE_NAME' && properties.dataSourceInfo.resourceName=='$STORAGE_ACCOUNT' && properties.currentProtectionState=='ProtectionConfigured']" \
+          --output tsv)
+
+      if [ -n "$backup_instance" ]; then
+          log "INFO" "Azure Backup is properly configured for storage account $STORAGE_ACCOUNT"
+      else
+          log "ERROR" "Azure Backup is not configured for storage account $STORAGE_ACCOUNT"
+          all_checks_passed=false
+          if [[ "$1" == "--checks-only" ]]; then return 1; fi
+      fi
+
+      if $all_checks_passed; then
+          log "INFO" "All backup checks passed successfully"
+          return 0
+      else
+          log "ERROR" "One or more backup checks failed"
+          return 1
+      fi
     else
-        log "INFO" "Skipping backup checks."
+        log "INFO" "Skipping backup checks"
     fi
 }
 
@@ -346,8 +422,79 @@ update_container_policies() {
 # Function to set up Azure Backup for Blobs
 setup_azure_backup() {
     log "INFO" "Setting up Azure Backup for Blobs..."
-    # Implementation of Azure Backup setup goes here
-    # This should include creating the Backup Vault, policy, and enabling protection
+    
+    # Install the dataprotection extension
+    ensure_dataprotection_extension
+
+    # Perform backup-specific checks
+    perform_checks_backup
+
+    if [ "$VAULT_EXISTS" = false ]; then
+        log "INFO" "Creating Backup Vault $BACKUP_VAULT_NAME..."
+        if ! az dataprotection backup-vault create \
+            --vault-name $BACKUP_VAULT_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --location $LOCATION \
+            --type "systemAssigned" \
+            --storage-setting "$STORAGE_SETTING" \
+            --immutability-state "unlocked" \
+            --tags $TAGS; then
+            log "ERROR" "Failed to create Backup Vault"
+            return 1
+        fi
+    fi
+
+    if [ "$POLICY_EXISTS" = false ]; then
+        log "INFO" "Creating backup policy $BACKUP_POLICY_NAME..."
+        if ! az dataprotection backup-policy create \
+            --resource-group $RESOURCE_GROUP \
+            --vault-name $BACKUP_VAULT_NAME \
+            --name $BACKUP_POLICY_NAME \
+            --policy @$POLICY_FILE; then
+            log "ERROR" "Failed to create backup policy"
+            return 1
+        fi
+    fi
+
+    if [ "$ROLE_ASSIGNED" = false ]; then
+        log "INFO" "Assigning Storage Account Backup Contributor role..."
+        local vault_object_id=$(az dataprotection backup-vault show \
+            --vault-name $BACKUP_VAULT_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --query identity.principalId \
+            --output tsv)
+            
+        if ! az role assignment create \
+            --assignee-object-id $vault_object_id \
+            --assignee-principal-type ServicePrincipal \
+            --role "Storage Account Backup Contributor" \
+            --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"; then
+            log "ERROR" "Failed to assign Storage Account Backup Contributor role"
+            return 1
+        fi
+    fi
+
+    if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
+        log "INFO" "Enabling backup protection for storage account $STORAGE_ACCOUNT..."
+        local backup_result=$(az dataprotection backup-instance create \
+            --resource-group $RESOURCE_GROUP \
+            --vault-name $BACKUP_VAULT_NAME \
+            --backup-instance @backup-instance.json 2>&1)
+        
+        if [ $? -eq 0 ]; then
+            log "INFO" "Successfully enabled Azure Backup for storage account $STORAGE_ACCOUNT"
+        elif echo "$backup_result" | grep -q "Datasource is already protected"; then
+            log "INFO" "Datasource is already protected - no action needed"
+        else
+            log "ERROR" "Failed to enable backup protection: $backup_result"
+            return 1
+        fi
+    else
+        log "INFO" "Backup protection is already enabled for storage account $STORAGE_ACCOUNT"
+    fi
+
+    log "INFO" "Azure Backup setup completed successfully"
+    return 0
 }
 
 # Main function to orchestrate the script
