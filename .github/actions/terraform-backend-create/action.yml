@@ -71,7 +71,7 @@ runs:
       run: |
         cd alz-reusable-workflows/scripts
         if [ "${{ inputs.checks_only }}" = "true" ]; then
-          ${{ github.action_path }}/scripts/create-tf-backend.sh --checks-only
+          bash ${{ github.action_path }}/scripts/create-tf-backend.sh --checks-only
         else
-          bash create-tf-backend.sh
+          bash ${{ github.action_path }}/scripts/create-tf-backend.sh
         fi
