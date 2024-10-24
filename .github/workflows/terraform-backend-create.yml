@@ -39,17 +39,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Checkout reusable-workflow repository
-        uses: actions/checkout@v4
-        with:
-          repository: elabx-org/alz-reusable-workflows
-          path: ./alz-reusable-workflows
-          ref: main
-          # token: ${{ secrets.GH_PAT }}
-          fetch-depth: 0        
-
       - name: Create TFState Storage
-        uses: ./alz-reusable-workflows/.github/actions/terraform-backend-create
+        uses: ./.github/actions/terraform-backend-create
         with:
           environment: ${{ inputs.environment }}
           subnet_ids: ${{ inputs.subnet_ids }}
