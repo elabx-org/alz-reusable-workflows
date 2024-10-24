@@ -22,18 +22,17 @@ inputs:
   client_id: { description: 'Azure Client ID', required: true }
   tenant_id: { description: 'Azure Tenant ID', required: true }
   subscription_id: { description: 'Azure Subscription ID', required: true }
+  tf_backend_sa_rg: { description: 'Terraform backend resource group', required: true }
+  tf_backend_sa: { description: 'Terraform backend storage account', required: true }
+  tf_backend_sa_container: { description: 'Terraform backend container', required: true }
+  tf_backend_sa_region: { description: 'Terraform backend region', required: true }
+  tf_backend_sa_region_short: { description: 'Terraform backend region short name', required: true }
+  tf_backend_sa_sku: { description: 'Terraform backend SKU', required: true }
+  tf_backend_env: { description: 'Terraform backend environment', required: true }
 
 runs:
   using: "composite"
   steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        repository: elabx-org/alz-reusable-workflows
-        path: alz-reusable-workflows
-        fetch-depth: 0
-        ref: main
-
     - name: Azure Login
       uses: azure/login@v2
       with:
@@ -44,13 +43,13 @@ runs:
     - name: Create TFState Storage
       shell: bash
       env:
-        TERRAFORM_BACKEND_RESOURCE_GROUP: ${{ vars.TF_BACKEND_SA_RG }}
-        TERRAFORM_BACKEND_STORAGE_ACCOUNT: ${{ vars.TF_BACKEND_SA }}
-        TERRAFORM_BACKEND_CONTAINER: ${{ vars.TF_BACKEND_SA_CONTAINER }}
-        TERRAFORM_BACKEND_LOCATION: ${{ vars.TF_BACKEND_SA_REGION }}
-        TERRAFORM_BACKEND_LOCATION_SHORT: ${{ vars.TF_BACKEND_SA_REGION_SHORT }}
-        TERRAFORM_BACKEND_SKU: ${{ vars.TF_BACKEND_SA_SKU }}
-        TERRAFORM_BACKEND_ENV: ${{ vars.TF_BACKEND_ENV }}
+        TERRAFORM_BACKEND_RESOURCE_GROUP: ${{ inputs.tf_backend_sa_rg }}
+        TERRAFORM_BACKEND_STORAGE_ACCOUNT: ${{ inputs.tf_backend_sa }}
+        TERRAFORM_BACKEND_CONTAINER: ${{ inputs.tf_backend_sa_container }}
+        TERRAFORM_BACKEND_LOCATION: ${{ inputs.tf_backend_sa_region }}
+        TERRAFORM_BACKEND_LOCATION_SHORT: ${{ inputs.tf_backend_sa_region_short }}
+        TERRAFORM_BACKEND_SKU: ${{ inputs.tf_backend_sa_sku }}
+        TERRAFORM_BACKEND_ENV: ${{ inputs.tf_backend_env }}
         ARM_SUBSCRIPTION_ID: ${{ inputs.subscription_id }}
         SUBNET_IDS: ${{ inputs.subnet_ids }}
         RUN_RESOURCE_PROVIDER_CHECK: ${{ inputs.run_resource_provider_check }}
@@ -74,3 +73,11 @@ runs:
         else
           bash ${{ github.action_path }}/scripts/create-tf-backend.sh
         fi
+
+    - name: Azure Logout
+      if: always()
+      shell: bash
+      run: |
+        az logout
+        az cache purge
+        az account clear
