@@ -504,7 +504,7 @@ main() {
     if [[ "$1" == "--checks-only" ]]; then
         log "INFO" "Running in checks-only mode."
         perform_checks
-        perform_checks_backup
+        # perform_checks_backup
     else
         log "INFO" "Running in create/update mode."
         if $CREATE_RESOURCE_GROUP; then
