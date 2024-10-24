@@ -70,7 +70,7 @@ runs:
         ARM_USE_OIDC: true
       run: |
         if [ "${{ inputs.checks_only }}" = "true" ]; then
-          bash ${{ github.action_path }}/.github/scripts/create-tf-backend.sh --checks-only
+          bash test.sh
         else
           bash ${{ github.action_path }}/.github/scripts/create-tf-backend.sh
         fi
