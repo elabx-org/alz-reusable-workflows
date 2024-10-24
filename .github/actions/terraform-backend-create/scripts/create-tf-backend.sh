@@ -528,7 +528,7 @@ main() {
         fi
         if $SETUP_AZURE_BACKUP; then
             register_resource_provider "Microsoft.DataProtection"
-            setup_azure_backup
+            # setup_azure_backup
         fi
     fi
 }
