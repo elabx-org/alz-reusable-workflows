@@ -61,14 +61,14 @@ else
 fi
 
 # Read backup-instance-template.json & substitute the variables
-sed -e "s/\${SUBSCRIPTION_ID}/${SUBSCRIPTION_ID}/g" \
-    -e "s/\${RESOURCE_GROUP}/${RESOURCE_GROUP}/g" \
-    -e "s/\${LOCATION}/${LOCATION}/g" \
-    -e "s/\${STORAGE_ACCOUNT}/${STORAGE_ACCOUNT}/g" \
-    -e "s/\${BACKUP_VAULT_NAME}/${BACKUP_VAULT_NAME}/g" \
-    -e "s/\${BACKUP_POLICY_NAME}/${BACKUP_POLICY_NAME}/g" \
-    -e "s/\${BACKUP_INSTANCE_NAME}/${BACKUP_INSTANCE_NAME}/g" \
-    backup-instance-template.json > backup-instance.json
+# sed -e "s/\${SUBSCRIPTION_ID}/${SUBSCRIPTION_ID}/g" \
+#     -e "s/\${RESOURCE_GROUP}/${RESOURCE_GROUP}/g" \
+#     -e "s/\${LOCATION}/${LOCATION}/g" \
+#     -e "s/\${STORAGE_ACCOUNT}/${STORAGE_ACCOUNT}/g" \
+#     -e "s/\${BACKUP_VAULT_NAME}/${BACKUP_VAULT_NAME}/g" \
+#     -e "s/\${BACKUP_POLICY_NAME}/${BACKUP_POLICY_NAME}/g" \
+#     -e "s/\${BACKUP_INSTANCE_NAME}/${BACKUP_INSTANCE_NAME}/g" \
+#     backup-instance-template.json > backup-instance.json
 
 # Logging function
 log() {
@@ -504,7 +504,7 @@ main() {
     if [[ "$1" == "--checks-only" ]]; then
         log "INFO" "Running in checks-only mode."
         perform_checks
-        # perform_checks_backup
+        perform_checks_backup
     else
         log "INFO" "Running in create/update mode."
         if $CREATE_RESOURCE_GROUP; then
@@ -528,7 +528,7 @@ main() {
         fi
         if $SETUP_AZURE_BACKUP; then
             register_resource_provider "Microsoft.DataProtection"
-            # setup_azure_backup
+            setup_azure_backup
         fi
     fi
 }
