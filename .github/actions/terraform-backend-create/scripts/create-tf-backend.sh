@@ -356,17 +356,12 @@ check_results+=("❌ Blob Properties: misconfigured")
         log "ERROR" "❌ One or more infrastructure checks failed"
         return 1
     else
-        if $RUN_BACKUP_CHECKS && [ -n "$consolidated_message" ]; then
-            if [[ $consolidated_message != "Azure Backup Configuration Status:%0A" ]]; then
-                echo "::notice::Infrastructure checks passed with backup configuration warnings"
-                log "INFO" "✅ Infrastructure checks passed (with backup configuration warnings)"
-            else
-                echo "::notice::All infrastructure checks passed successfully"
-                log "INFO" "✅ All infrastructure checks passed"
-            fi
+        if [[ $consolidated_message != "Azure Backup Configuration Status:%0A" ]]; then
+            echo "::notice::Infrastructure checks passed with backup configuration warnings"
+            log "INFO" "✅ Infrastructure checks passed (with backup configuration warnings)"
         else
-            echo "::notice::Infrastructure checks passed successfully (backup checks were skipped)"
-            log "INFO" "✅ Infrastructure checks passed (backup checks were skipped)"
+            echo "::notice::All infrastructure checks passed successfully"
+            log "INFO" "✅ All infrastructure checks passed"
         fi
         return 0
     fi
@@ -375,7 +370,6 @@ check_results+=("❌ Blob Properties: misconfigured")
 # Function to check backup status without failing
 check_backup_status() {
     log "INFO" "🔍 Checking backup status..."
-    local check_results=()
     VAULT_EXISTS=false
     POLICY_EXISTS=false
     ROLE_ASSIGNED=false
@@ -456,15 +450,11 @@ perform_checks_backup() {
     if $RUN_BACKUP_CHECKS; then
         log "INFO" "🔍 Performing backup checks..."
         local check_results=()
-        local warnings=()
-        local consolidated_message=""
-
+        
         # Run checks without failing
         check_backup_status
 
-        # Now evaluate the results and build message
-        consolidated_message="Azure Backup Configuration Status:%0A"
-        
+        # Build check results
         if [ "$VAULT_EXISTS" = false ]; then
             check_results+=("❌ Backup Vault: does not exist")
             consolidated_message+="- Backup Vault does not exist%0A"
@@ -472,28 +462,37 @@ perform_checks_backup() {
             check_results+=("✅ Backup Vault: exists")
         fi
 
-        if [ "$POLICY_EXISTS" = false ]; then
-            check_results+=("❌ Backup Policy: does not exist")
+        if [ "$VAULT_EXISTS" = false ]; then
+            check_results+=("⚠️ Backup Policy: check skipped (vault missing)")
+            check_results+=("⚠️ Backup Contributor Role: check skipped (vault missing)")
+            check_results+=("⚠️ Backup Protection: check skipped (vault missing)")
             consolidated_message+="- Backup Policy does not exist%0A"
-        else
-            check_results+=("✅ Backup Policy: exists")
-        fi
-
-        if [ "$ROLE_ASSIGNED" = false ]; then
-            check_results+=("❌ Backup Contributor Role: not assigned")
             consolidated_message+="- Storage Account Backup Contributor role is not assigned%0A"
-        else
-            check_results+=("✅ Backup Contributor Role: assigned")
-        fi
-
-        if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
-            check_results+=("❌ Backup Protection: not configured")
             consolidated_message+="- Azure Backup is not configured for storage account%0A"
         else
-            check_results+=("✅ Backup Protection: enabled")
+            if [ "$POLICY_EXISTS" = false ]; then
+                check_results+=("❌ Backup Policy: does not exist")
+                consolidated_message+="- Backup Policy does not exist%0A"
+            else
+                check_results+=("✅ Backup Policy: exists")
+            fi
+
+            if [ "$ROLE_ASSIGNED" = false ]; then
+                check_results+=("❌ Backup Contributor Role: not assigned")
+                consolidated_message+="- Storage Account Backup Contributor role is not assigned%0A"
+            else
+                check_results+=("✅ Backup Contributor Role: assigned")
+            fi
+
+            if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
+                check_results+=("❌ Backup Protection: not configured")
+                consolidated_message+="- Azure Backup is not configured for storage account%0A"
+            else
+                check_results+=("✅ Backup Protection: enabled")
+            fi
         fi
 
-        # Display summary of all checks
+        # Display summary
         log "INFO" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         log "INFO" "Azure Backup Checks Summary:"
         log "INFO" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -502,21 +501,16 @@ perform_checks_backup() {
         done
         log "INFO" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-        # Create a single consolidated warning if any checks failed
+        # Create warning if needed
         if [[ $consolidated_message != "Azure Backup Configuration Status:%0A" ]]; then
-            echo "::warning::$consolidated_message"
+            echo "::warning::${consolidated_message}"
             log "WARN" "⚠️ One or more backup checks had warnings"
-        else
-            echo "::notice::All Azure Backup checks passed successfully"
-            log "INFO" "✅ All backup checks passed"
         fi
     else
         log "INFO" "ℹ️ Skipping backup checks"
     fi
-
-    # Always return success
-    return 0
 }
+
 
 # Function to register resource provider
 register_resource_provider() {
