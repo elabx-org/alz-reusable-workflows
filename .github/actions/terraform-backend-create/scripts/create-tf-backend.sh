@@ -744,18 +744,14 @@ main() {
 
     if [[ "$1" == "--checks-only" ]]; then
         log "INFO" "🔍 Running in checks-only mode."
-        
-        if $RUN_INFRA_CHECKS; then
-            perform_checks
-        else
-            log "INFO" "ℹ️ Skipping infrastructure checks"
-        fi
-        
-        if $RUN_BACKUP_CHECKS; then
-            perform_checks_backup
-        else
-            log "INFO" "ℹ️ Skipping backup checks"
-        fi
+        perform_checks
+        perform_checks_backup
+    elif [[ "$1" == "--backup-only" ]]; then
+        log "INFO" "🔍 Running backup checks only."
+        perform_checks_backup
+    elif [[ "$1" == "--infra-only" ]]; then
+        log "INFO" "🔍 Running infrastructure checks only."
+        perform_checks
     else
         log "INFO" "🏗️ Running in create/update mode."
         if $CREATE_RESOURCE_GROUP; then
@@ -783,3 +779,6 @@ main() {
         fi
     fi
 }
+
+# Run the main function
+main "$@"

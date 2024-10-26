@@ -68,10 +68,14 @@ runs:
         SETUP_AZURE_BACKUP: ${{ inputs.setup_azure_backup }}
         ARM_USE_OIDC: true
       run: |
-        if [ "${{ inputs.checks_only }}" = "true" ]; then
-          bash ${{ github.action_path }}/scripts/create-tf-backend.sh --checks-only
+        if [ "${{ inputs.mode }}" = "checks-only" ]; then
+          ${{ github.action_path }}/scripts/create-tf-backend.sh --checks-only
+        elif [ "${{ inputs.mode }}" = "backup-only" ]; then
+          ${{ github.action_path }}/scripts/create-tf-backend.sh --backup-only
+        elif [ "${{ inputs.mode }}" = "infra-only" ]; then
+          ${{ github.action_path }}/scripts/create-tf-backend.sh --infra-only
         else
-          bash ${{ github.action_path }}/scripts/create-tf-backend.sh
+          ${{ github.action_path }}/scripts/create-tf-backend.sh
         fi
 
     - name: Azure Logout
