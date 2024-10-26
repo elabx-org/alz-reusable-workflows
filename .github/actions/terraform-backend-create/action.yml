@@ -29,6 +29,7 @@ inputs:
   tf_backend_sa_region_short: { description: 'Terraform backend region short name', required: true }
   tf_backend_sa_sku: { description: 'Terraform backend SKU', required: true }
   tf_backend_env: { description: 'Terraform backend environment', required: true }
+  mode: {description: 'Run mode (checks-only, backup-only, infra-only, or create)', required: false,default: 'create'}  
 
 runs:
   using: "composite"
