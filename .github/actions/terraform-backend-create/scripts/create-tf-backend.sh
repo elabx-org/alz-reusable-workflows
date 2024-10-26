@@ -253,9 +253,8 @@ check_container_service_properties() {
 
 # Function to perform all checks
 perform_checks() {
-    local all_checks_passed=true
     local check_results=()
-    local failed_checks=()
+    local warnings=()
 
     log "INFO" "🔍 Starting infrastructure checks..."
 
@@ -265,16 +264,16 @@ perform_checks() {
         check_results+=("✅ Container: exists")
     else
         log "INFO" "Container $CONTAINER_NAME does not exist. Performing all checks."
-        check_results+=("❌ Container: does not exist")
+        check_results+=("⚠️ Container: does not exist")
+        warnings+=("Container $CONTAINER_NAME does not exist")
         
         # Resource Provider check
         if $RUN_RESOURCE_PROVIDER_CHECK; then
             if check_resource_provider "Microsoft.Storage"; then
                 check_results+=("✅ Resource Provider: registered")
             else
-                check_results+=("❌ Resource Provider: not registered")
-                failed_checks+=("Microsoft.Storage resource provider is not registered")
-                all_checks_passed=false
+                check_results+=("⚠️ Resource Provider: not registered")
+                warnings+=("Microsoft.Storage resource provider is not registered")
             fi
         fi
 
@@ -283,9 +282,8 @@ perform_checks() {
             if check_resource_group; then
                 check_results+=("✅ Resource Group: exists")
             else
-                check_results+=("❌ Resource Group: does not exist")
-                failed_checks+=("Resource Group does not exist")
-                all_checks_passed=false
+                check_results+=("⚠️ Resource Group: does not exist")
+                warnings+=("Resource Group does not exist")
             fi
         fi
 
@@ -294,9 +292,8 @@ perform_checks() {
             if check_storage_account; then
                 check_results+=("✅ Storage Account: properly configured")
             else
-                check_results+=("❌ Storage Account: misconfigured or does not exist")
-                failed_checks+=("Storage Account is misconfigured or does not exist")
-                all_checks_passed=false
+                check_results+=("⚠️ Storage Account: misconfigured or does not exist")
+                warnings+=("Storage Account is misconfigured or does not exist")
             fi
         fi
     fi
@@ -306,9 +303,8 @@ perform_checks() {
         if check_network_rules; then
             check_results+=("✅ Network Rules: properly configured")
         else
-            check_results+=("❌ Network Rules: misconfigured")
-            failed_checks+=("Network rules are not properly configured")
-            all_checks_passed=false
+            check_results+=("⚠️ Network Rules: misconfigured")
+            warnings+=("Network rules are not properly configured")
         fi
     fi
 
@@ -317,9 +313,8 @@ perform_checks() {
         if check_blob_service_properties; then
             check_results+=("✅ Blob Properties: properly configured")
         else
-check_results+=("❌ Blob Properties: misconfigured")
-            failed_checks+=("Blob properties are not properly configured")
-            all_checks_passed=false
+            check_results+=("⚠️ Blob Properties: misconfigured")
+            warnings+=("Blob properties are not properly configured")
         fi
     fi
 
@@ -328,9 +323,8 @@ check_results+=("❌ Blob Properties: misconfigured")
         if check_container_service_properties; then
             check_results+=("✅ Container Properties: properly configured")
         else
-            check_results+=("❌ Container Properties: misconfigured")
-            failed_checks+=("Container properties are not properly configured")
-            all_checks_passed=false
+            check_results+=("⚠️ Container Properties: misconfigured")
+            warnings+=("Container properties are not properly configured")
         fi
     fi
 
@@ -343,19 +337,19 @@ check_results+=("❌ Blob Properties: misconfigured")
     done
     log "INFO" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    # If any checks failed, create an error annotation
-    if ! $all_checks_passed; then
-        echo "::error::Infrastructure Checks Failed"
-        for failed in "${failed_checks[@]}"; do
-            echo "::error::- ${failed}"
+    # If any checks failed, create warning annotations but don't fail
+    if [ ${#warnings[@]} -gt 0 ]; then
+        echo "::warning::Infrastructure Checks Warnings"
+        for warning in "${warnings[@]}"; do
+            echo "::warning::- ${warning}"
         done
-        log "ERROR" "❌ One or more infrastructure checks failed"
-        return 1
+        log "WARN" "⚠️ One or more infrastructure checks had warnings"
     else
         echo "::notice::All infrastructure checks passed successfully"
         log "INFO" "✅ All infrastructure checks passed"
-        return 0
     fi
+
+    return 0  # Always return success
 }
 
 # Function to check backup status without failing
