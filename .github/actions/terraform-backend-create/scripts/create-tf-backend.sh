@@ -30,6 +30,9 @@ UPDATE_BLOB_POLICIES=${UPDATE_BLOB_POLICIES:-true}
 UPDATE_CONTAINER_POLICIES=${UPDATE_CONTAINER_POLICIES:-true}
 SETUP_AZURE_BACKUP=${SETUP_AZURE_BACKUP:-true}
 
+# Initialize the consolidated_message at the start of script
+consolidated_message="Azure Backup Configuration Status:%0A"
+
 # Default subnet IDs
 default_subnet_ids=(
     "/subscriptions/redacted_sub_id/resourceGroups/rg-vnet_spoke_shared_services_defender-yrbj/providers/Microsoft.Network/virtualNetworks/vnet-shared_services_network_1_defender-jthq/subnets/snet-aks_defender_nodepool_system-isxr" # new bank runners
@@ -253,6 +256,7 @@ check_container_service_properties() {
 
 # Function to perform all checks
 perform_checks() {
+    local backup_warnings=${1:-false}  # Pass backup warnings status, default to false
     local all_checks_passed=true
     local check_results=()
     local failed_checks=()
@@ -352,8 +356,18 @@ check_results+=("❌ Blob Properties: misconfigured")
         log "ERROR" "❌ One or more infrastructure checks failed"
         return 1
     else
-        echo "::notice::All infrastructure checks passed successfully"
-        log "INFO" "✅ All infrastructure checks passed"
+        if $RUN_BACKUP_CHECKS && [ -n "$consolidated_message" ]; then
+            if [[ $consolidated_message != "Azure Backup Configuration Status:%0A" ]]; then
+                echo "::notice::Infrastructure checks passed with backup configuration warnings"
+                log "INFO" "✅ Infrastructure checks passed (with backup configuration warnings)"
+            else
+                echo "::notice::All infrastructure checks passed successfully"
+                log "INFO" "✅ All infrastructure checks passed"
+            fi
+        else
+            echo "::notice::Infrastructure checks passed successfully (backup checks were skipped)"
+            log "INFO" "✅ Infrastructure checks passed (backup checks were skipped)"
+        fi
         return 0
     fi
 }
@@ -709,8 +723,10 @@ main() {
 
     if [[ "$1" == "--checks-only" ]]; then
         log "INFO" "🔍 Running in checks-only mode."
+        if $RUN_BACKUP_CHECKS; then
+            perform_checks_backup
+        fi
         perform_checks
-        perform_checks_backup "$1"  # Pass the --checks-only flag
     else
         log "INFO" "🏗️ Running in create/update mode."
         if $CREATE_RESOURCE_GROUP; then
