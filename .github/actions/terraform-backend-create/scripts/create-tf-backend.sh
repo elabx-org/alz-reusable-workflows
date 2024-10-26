@@ -742,42 +742,52 @@ main() {
     get_and_set_tags
     setup_backup_variables
 
-    if [[ "$1" == "--checks-only" ]]; then
-        log "INFO" "🔍 Running in checks-only mode."
-        perform_checks
-        perform_checks_backup
-    elif [[ "$1" == "--backup-only" ]]; then
-        log "INFO" "🔍 Running backup checks only."
-        perform_checks_backup
-    elif [[ "$1" == "--infra-only" ]]; then
-        log "INFO" "🔍 Running infrastructure checks only."
-        perform_checks
-    else
-        log "INFO" "🏗️ Running in create/update mode."
-        if $CREATE_RESOURCE_GROUP; then
-            register_resource_provider "Microsoft.Storage"
-            create_resource_group
-        fi
-        if $CREATE_STORAGE_ACCOUNT; then
-            create_storage_account
-        fi
-        if $UPDATE_NETWORK_RULES; then
-            update_storage_network_rules
-        fi
-        if $CREATE_CONTAINER; then
-            create_container
-        fi
-        if $UPDATE_BLOB_POLICIES; then
-            update_blob_policies
-        fi
-        if $UPDATE_CONTAINER_POLICIES; then
-            update_container_policies
-        fi
-        if $SETUP_AZURE_BACKUP; then
-            register_resource_provider "Microsoft.DataProtection"
-            setup_azure_backup
-        fi
-    fi
+    case "$1" in
+        "checks-only")
+            log "INFO" "🔍 Running in checks-only mode."
+            perform_checks
+            perform_checks_backup
+            ;;
+        "backup-only")
+            log "INFO" "🔍 Running backup checks only."
+            perform_checks_backup
+            ;;
+        "infra-only")
+            log "INFO" "🔍 Running infrastructure checks only."
+            perform_checks
+            ;;
+        "create"|"")  # Default to create if no argument provided
+            log "INFO" "🏗️ Running in create/update mode."
+            if $CREATE_RESOURCE_GROUP; then
+                register_resource_provider "Microsoft.Storage"
+                create_resource_group
+            fi
+            if $CREATE_STORAGE_ACCOUNT; then
+                create_storage_account
+            fi
+            if $UPDATE_NETWORK_RULES; then
+                update_storage_network_rules
+            fi
+            if $CREATE_CONTAINER; then
+                create_container
+            fi
+            if $UPDATE_BLOB_POLICIES; then
+                update_blob_policies
+            fi
+            if $UPDATE_CONTAINER_POLICIES; then
+                update_container_policies
+            fi
+            if $SETUP_AZURE_BACKUP; then
+                register_resource_provider "Microsoft.DataProtection"
+                setup_azure_backup
+            fi
+            ;;
+        *)
+            log "ERROR" "❌ Invalid mode: $1"
+            log "ERROR" "Valid modes are: checks-only, backup-only, infra-only, create"
+            exit 1
+            ;;
+    esac
 }
 
 # Run the main function
