@@ -450,18 +450,31 @@ perform_checks_backup() {
     if $RUN_BACKUP_CHECKS; then
         log "INFO" "🔍 Performing backup checks..."
         local check_results=()
-        
-        # Run checks without failing
-        check_backup_status
+        consolidated_message="Azure Backup Configuration Status:%0A"
 
-        # Build check results
-        if [ "$VAULT_EXISTS" = false ]; then
+        # Run checks
+        log "INFO" "🔍 Checking backup status..."
+        log "INFO" "🔍 Checking if dataprotection extension is installed..."
+        ensure_dataprotection_extension
+
+        # Check if the backup vault exists
+        log "INFO" "🔍 Checking if Backup Vault exists..."
+        VAULT_EXISTS=false
+        POLICY_EXISTS=false
+        ROLE_ASSIGNED=false
+        BACKUP_PROTECTION_ENABLED=false
+
+        if az dataprotection backup-vault show --vault-name $BACKUP_VAULT_NAME --resource-group $RESOURCE_GROUP &>/dev/null; then
+            log "INFO" "Backup Vault '$BACKUP_VAULT_NAME' exists"
+            VAULT_EXISTS=true
+            check_results+=("✅ Backup Vault: exists")
+        else
+            log "INFO" "Backup Vault '$BACKUP_VAULT_NAME' does not exist"    
             check_results+=("❌ Backup Vault: does not exist")
             consolidated_message+="- Backup Vault does not exist%0A"
-        else
-            check_results+=("✅ Backup Vault: exists")
         fi
 
+        # Only check other components if vault exists
         if [ "$VAULT_EXISTS" = false ]; then
             check_results+=("⚠️ Backup Policy: check skipped (vault missing)")
             check_results+=("⚠️ Backup Contributor Role: check skipped (vault missing)")
@@ -470,29 +483,42 @@ perform_checks_backup() {
             consolidated_message+="- Storage Account Backup Contributor role is not assigned%0A"
             consolidated_message+="- Azure Backup is not configured for storage account%0A"
         else
-            if [ "$POLICY_EXISTS" = false ]; then
+            # Check backup policy
+            if az dataprotection backup-policy show --resource-group $RESOURCE_GROUP --vault-name $BACKUP_VAULT_NAME --name $BACKUP_POLICY_NAME &>/dev/null; then
+                POLICY_EXISTS=true
+                check_results+=("✅ Backup Policy: exists")
+            else
                 check_results+=("❌ Backup Policy: does not exist")
                 consolidated_message+="- Backup Policy does not exist%0A"
-            else
-                check_results+=("✅ Backup Policy: exists")
             fi
 
-            if [ "$ROLE_ASSIGNED" = false ]; then
+            # Check role assignment
+            VAULT_OBJECT_ID=$(az dataprotection backup-vault show --vault-name $BACKUP_VAULT_NAME --resource-group $RESOURCE_GROUP --query identity.principalId --output tsv)
+            if az role assignment list --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}" --query "[?principalId=='${VAULT_OBJECT_ID}' && roleDefinitionName=='Storage Account Backup Contributor']" -o tsv | grep -q "Storage Account Backup Contributor"; then
+                ROLE_ASSIGNED=true
+                check_results+=("✅ Backup Contributor Role: assigned")
+            else
                 check_results+=("❌ Backup Contributor Role: not assigned")
                 consolidated_message+="- Storage Account Backup Contributor role is not assigned%0A"
-            else
-                check_results+=("✅ Backup Contributor Role: assigned")
             fi
 
-            if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
+            # Check backup protection
+            backup_instance=$(az dataprotection backup-instance list \
+                --resource-group "$RESOURCE_GROUP" \
+                --vault-name "$BACKUP_VAULT_NAME" \
+                --query "[?name=='$BACKUP_INSTANCE_NAME' && properties.dataSourceInfo.resourceName=='$STORAGE_ACCOUNT' && properties.currentProtectionState=='ProtectionConfigured']" \
+                --output tsv)
+
+            if [ -n "$backup_instance" ]; then
+                BACKUP_PROTECTION_ENABLED=true
+                check_results+=("✅ Backup Protection: enabled")
+            else
                 check_results+=("❌ Backup Protection: not configured")
                 consolidated_message+="- Azure Backup is not configured for storage account%0A"
-            else
-                check_results+=("✅ Backup Protection: enabled")
             fi
         fi
 
-        # Display summary
+        # Display single summary
         log "INFO" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         log "INFO" "Azure Backup Checks Summary:"
         log "INFO" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
