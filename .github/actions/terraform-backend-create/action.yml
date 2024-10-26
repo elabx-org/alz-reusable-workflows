@@ -69,13 +69,13 @@ runs:
         ARM_USE_OIDC: true
       run: |
         if [ "${{ inputs.mode }}" = "checks-only" ]; then
-          ${{ github.action_path }}/scripts/create-tf-backend.sh --checks-only
+          bash ${{ github.action_path }}/scripts/create-tf-backend.sh --checks-only
         elif [ "${{ inputs.mode }}" = "backup-only" ]; then
-          ${{ github.action_path }}/scripts/create-tf-backend.sh --backup-only
+          bash ${{ github.action_path }}/scripts/create-tf-backend.sh --backup-only
         elif [ "${{ inputs.mode }}" = "infra-only" ]; then
-          ${{ github.action_path }}/scripts/create-tf-backend.sh --infra-only
+          bash ${{ github.action_path }}/scripts/create-tf-backend.sh --infra-only
         else
-          ${{ github.action_path }}/scripts/create-tf-backend.sh
+          bash ${{ github.action_path }}/scripts/create-tf-backend.sh
         fi
 
     - name: Azure Logout
