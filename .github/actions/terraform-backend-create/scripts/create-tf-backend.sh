@@ -14,13 +14,14 @@ ENVIRONMENT=${TERRAFORM_BACKEND_ENV}
 SUBSCRIPTION_ID=${ARM_SUBSCRIPTION_ID}
 
 # Configuration (using environment variables with defaults)
+RUN_INFRA_CHECKS=${RUN_INFRA_CHECKS:-true}
+RUN_BACKUP_CHECKS=${RUN_BACKUP_CHECKS:-true}
 RUN_RESOURCE_PROVIDER_CHECK=${RUN_RESOURCE_PROVIDER_CHECK:-true}
 RUN_RESOURCE_GROUP_CHECK=${RUN_RESOURCE_GROUP_CHECK:-true}
 RUN_STORAGE_ACCOUNT_CHECK=${RUN_STORAGE_ACCOUNT_CHECK:-true}
 RUN_NETWORK_RULES_CHECK=${RUN_NETWORK_RULES_CHECK:-true}
 RUN_BLOB_PROPERTIES_CHECK=${RUN_BLOB_PROPERTIES_CHECK:-true}
 RUN_CONTAINER_PROPERTIES_CHECK=${RUN_CONTAINER_PROPERTIES_CHECK:-true}
-RUN_BACKUP_CHECKS=${RUN_BACKUP_CHECKS:-true}
 
 CREATE_RESOURCE_GROUP=${CREATE_RESOURCE_GROUP:-true}
 CREATE_STORAGE_ACCOUNT=${CREATE_STORAGE_ACCOUNT:-true}
@@ -743,10 +744,18 @@ main() {
 
     if [[ "$1" == "--checks-only" ]]; then
         log "INFO" "🔍 Running in checks-only mode."
+        
+        if $RUN_INFRA_CHECKS; then
+            perform_checks
+        else
+            log "INFO" "ℹ️ Skipping infrastructure checks"
+        fi
+        
         if $RUN_BACKUP_CHECKS; then
             perform_checks_backup
+        else
+            log "INFO" "ℹ️ Skipping backup checks"
         fi
-        perform_checks
     else
         log "INFO" "🏗️ Running in create/update mode."
         if $CREATE_RESOURCE_GROUP; then
@@ -774,6 +783,3 @@ main() {
         fi
     fi
 }
-
-# Run the main function
-main "$@"
