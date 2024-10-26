@@ -266,10 +266,10 @@ perform_checks() {
 
     # Container existence check
     if check_container_exists; then
-        log "INFO" "Container $CONTAINER_NAME exists. Skipping basic existence checks."
+        log "INFO" "📦 ⏭️ Container $CONTAINER_NAME exists. Skipping full checks."
         check_results+=("✅ Container: exists")
     else
-        log "INFO" "Container $CONTAINER_NAME does not exist. Performing all checks."
+        log "INFO" "📦 ❌ Container $CONTAINER_NAME does not exist. Performing all checks."
         check_results+=("❌ Container: does not exist")
         
         # Resource Provider check
