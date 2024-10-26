@@ -443,6 +443,7 @@ perform_checks_backup() {
         log "INFO" "🔍 Performing backup checks..."
         local check_results=()
         local warnings=()
+        local consolidated_message="Azure Backup Configuration Status:\n"
 
         # Run checks without failing
         check_backup_status
@@ -450,28 +451,28 @@ perform_checks_backup() {
         # Now evaluate the results
         if [ "$VAULT_EXISTS" = false ]; then
             check_results+=("❌ Backup Vault: does not exist")
-            warnings+=("Backup Vault does not exist")
+            consolidated_message+="• Backup Vault does not exist\n"
         else
             check_results+=("✅ Backup Vault: exists")
         fi
 
         if [ "$POLICY_EXISTS" = false ]; then
             check_results+=("❌ Backup Policy: does not exist")
-            warnings+=("Backup Policy does not exist")
+            consolidated_message+="• Backup Policy does not exist\n"
         else
             check_results+=("✅ Backup Policy: exists")
         fi
 
         if [ "$ROLE_ASSIGNED" = false ]; then
             check_results+=("❌ Backup Contributor Role: not assigned")
-            warnings+=("Storage Account Backup Contributor role is not assigned")
+            consolidated_message+="• Storage Account Backup Contributor role is not assigned\n"
         else
             check_results+=("✅ Backup Contributor Role: assigned")
         fi
 
         if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
             check_results+=("❌ Backup Protection: not configured")
-            warnings+=("Azure Backup is not configured for storage account")
+            consolidated_message+="• Azure Backup is not configured for storage account\n"
         else
             check_results+=("✅ Backup Protection: enabled")
         fi
@@ -485,12 +486,9 @@ perform_checks_backup() {
         done
         log "INFO" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-        # Create warning annotations for any failed checks, but don't fail the run
-        if [ ${#warnings[@]} -gt 0 ]; then
-            echo "::warning::Azure Backup Checks Found Issues"
-            for warning in "${warnings[@]}"; do
-                echo "::warning::- ${warning}"
-            done
+        # Create a single consolidated warning if any checks failed
+        if [[ $consolidated_message != "Azure Backup Configuration Status:\n" ]]; then
+            echo "::warning::${consolidated_message}"
             log "WARN" "⚠️ One or more backup checks had warnings"
         else
             echo "::notice::All Azure Backup checks passed successfully"
