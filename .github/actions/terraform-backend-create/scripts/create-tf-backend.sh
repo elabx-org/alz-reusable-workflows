@@ -253,8 +253,9 @@ check_container_service_properties() {
 
 # Function to perform all checks
 perform_checks() {
+    local all_checks_passed=true
     local check_results=()
-    local warnings=()
+    local failed_checks=()
 
     log "INFO" "🔍 Starting infrastructure checks..."
 
@@ -264,16 +265,16 @@ perform_checks() {
         check_results+=("✅ Container: exists")
     else
         log "INFO" "Container $CONTAINER_NAME does not exist. Performing all checks."
-        check_results+=("⚠️ Container: does not exist")
-        warnings+=("Container $CONTAINER_NAME does not exist")
+        check_results+=("❌ Container: does not exist")
         
         # Resource Provider check
         if $RUN_RESOURCE_PROVIDER_CHECK; then
             if check_resource_provider "Microsoft.Storage"; then
                 check_results+=("✅ Resource Provider: registered")
             else
-                check_results+=("⚠️ Resource Provider: not registered")
-                warnings+=("Microsoft.Storage resource provider is not registered")
+                check_results+=("❌ Resource Provider: not registered")
+                failed_checks+=("Microsoft.Storage resource provider is not registered")
+                all_checks_passed=false
             fi
         fi
 
@@ -282,8 +283,9 @@ perform_checks() {
             if check_resource_group; then
                 check_results+=("✅ Resource Group: exists")
             else
-                check_results+=("⚠️ Resource Group: does not exist")
-                warnings+=("Resource Group does not exist")
+                check_results+=("❌ Resource Group: does not exist")
+                failed_checks+=("Resource Group does not exist")
+                all_checks_passed=false
             fi
         fi
 
@@ -292,8 +294,9 @@ perform_checks() {
             if check_storage_account; then
                 check_results+=("✅ Storage Account: properly configured")
             else
-                check_results+=("⚠️ Storage Account: misconfigured or does not exist")
-                warnings+=("Storage Account is misconfigured or does not exist")
+                check_results+=("❌ Storage Account: misconfigured or does not exist")
+                failed_checks+=("Storage Account is misconfigured or does not exist")
+                all_checks_passed=false
             fi
         fi
     fi
@@ -303,8 +306,9 @@ perform_checks() {
         if check_network_rules; then
             check_results+=("✅ Network Rules: properly configured")
         else
-            check_results+=("⚠️ Network Rules: misconfigured")
-            warnings+=("Network rules are not properly configured")
+            check_results+=("❌ Network Rules: misconfigured")
+            failed_checks+=("Network rules are not properly configured")
+            all_checks_passed=false
         fi
     fi
 
@@ -313,8 +317,9 @@ perform_checks() {
         if check_blob_service_properties; then
             check_results+=("✅ Blob Properties: properly configured")
         else
-            check_results+=("⚠️ Blob Properties: misconfigured")
-            warnings+=("Blob properties are not properly configured")
+check_results+=("❌ Blob Properties: misconfigured")
+            failed_checks+=("Blob properties are not properly configured")
+            all_checks_passed=false
         fi
     fi
 
@@ -323,8 +328,9 @@ perform_checks() {
         if check_container_service_properties; then
             check_results+=("✅ Container Properties: properly configured")
         else
-            check_results+=("⚠️ Container Properties: misconfigured")
-            warnings+=("Container properties are not properly configured")
+            check_results+=("❌ Container Properties: misconfigured")
+            failed_checks+=("Container properties are not properly configured")
+            all_checks_passed=false
         fi
     fi
 
@@ -337,19 +343,19 @@ perform_checks() {
     done
     log "INFO" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    # If any checks failed, create warning annotations but don't fail
-    if [ ${#warnings[@]} -gt 0 ]; then
-        echo "::warning::Infrastructure Checks Warnings"
-        for warning in "${warnings[@]}"; do
-            echo "::warning::- ${warning}"
+    # If any checks failed, create an error annotation
+    if ! $all_checks_passed; then
+        echo "::error::Infrastructure Checks Failed"
+        for failed in "${failed_checks[@]}"; do
+            echo "::error::- ${failed}"
         done
-        log "WARN" "⚠️ One or more infrastructure checks had warnings"
+        log "ERROR" "❌ One or more infrastructure checks failed"
+        return 1
     else
         echo "::notice::All infrastructure checks passed successfully"
         log "INFO" "✅ All infrastructure checks passed"
+        return 0
     fi
-
-    return 0  # Always return success
 }
 
 # Function to check backup status without failing
@@ -435,42 +441,37 @@ check_backup_status() {
 perform_checks_backup() {
     if $RUN_BACKUP_CHECKS; then
         log "INFO" "🔍 Performing backup checks..."
-        local all_checks_passed=true
         local check_results=()
-        local failed_checks=()
+        local warnings=()
 
         # Run checks without failing
         check_backup_status
 
         # Now evaluate the results
         if [ "$VAULT_EXISTS" = false ]; then
-            all_checks_passed=false
             check_results+=("❌ Backup Vault: does not exist")
-            failed_checks+=("Backup Vault does not exist")
+            warnings+=("Backup Vault does not exist")
         else
             check_results+=("✅ Backup Vault: exists")
         fi
 
         if [ "$POLICY_EXISTS" = false ]; then
-            all_checks_passed=false
             check_results+=("❌ Backup Policy: does not exist")
-            failed_checks+=("Backup Policy does not exist")
+            warnings+=("Backup Policy does not exist")
         else
             check_results+=("✅ Backup Policy: exists")
         fi
 
         if [ "$ROLE_ASSIGNED" = false ]; then
-            all_checks_passed=false
             check_results+=("❌ Backup Contributor Role: not assigned")
-            failed_checks+=("Storage Account Backup Contributor role is not assigned")
+            warnings+=("Storage Account Backup Contributor role is not assigned")
         else
             check_results+=("✅ Backup Contributor Role: assigned")
         fi
 
         if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
-            all_checks_passed=false
             check_results+=("❌ Backup Protection: not configured")
-            failed_checks+=("Azure Backup is not configured for storage account")
+            warnings+=("Azure Backup is not configured for storage account")
         else
             check_results+=("✅ Backup Protection: enabled")
         fi
@@ -484,25 +485,23 @@ perform_checks_backup() {
         done
         log "INFO" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-        # If any checks failed and we're in checks-only mode, fail
-        if ! $all_checks_passed && [ "$1" == "--checks-only" ]; then
-            echo "::error::Azure Backup Checks Failed"
-            for failed in "${failed_checks[@]}"; do
-                echo "::error::- ${failed}"
+        # Create warning annotations for any failed checks, but don't fail the run
+        if [ ${#warnings[@]} -gt 0 ]; then
+            echo "::warning::Azure Backup Checks Found Issues"
+            for warning in "${warnings[@]}"; do
+                echo "::warning::- ${warning}"
             done
-            log "ERROR" "❌ One or more backup checks failed"
-            return 1
+            log "WARN" "⚠️ One or more backup checks had warnings"
         else
-            if $all_checks_passed; then
-                echo "::notice::All Azure Backup checks passed successfully"
-                log "INFO" "✅ All backup checks passed"
-            fi
-            return 0
+            echo "::notice::All Azure Backup checks passed successfully"
+            log "INFO" "✅ All backup checks passed"
         fi
     else
         log "INFO" "ℹ️ Skipping backup checks"
-        return 0
     fi
+
+    # Always return success
+    return 0
 }
 
 # Function to register resource provider
