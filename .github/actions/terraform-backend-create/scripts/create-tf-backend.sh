@@ -732,11 +732,10 @@ setup_azure_backup() {
         log "DEBUG" "Using backup instance configuration:"
         cat "$output_file"
 
-        # Try to create backup instance with explicit name
+        # Try to create backup instance without the name parameter
         local backup_result=$(az dataprotection backup-instance create \
             --resource-group "$RESOURCE_GROUP" \
             --vault-name "$BACKUP_VAULT_NAME" \
-            --name "$BACKUP_INSTANCE_NAME" \
             --backup-instance @"$output_file")
         
         local exit_code=$?
