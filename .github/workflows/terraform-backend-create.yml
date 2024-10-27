@@ -19,7 +19,6 @@ on:
       update_blob_policies: {required: false, type: boolean, default: true}
       update_container_policies: {required: false, type: boolean, default: true}
       setup_azure_backup: {required: false, type: boolean, default: true}
-      checks_only: {required: false, type: boolean, default: false}
       mode: {description: 'Run mode (checks-only, backup-only, infra-only, or create)', required: false, type: string, default: 'create'}
     secrets:
       ARM_TENANT_ID: {required: true}
