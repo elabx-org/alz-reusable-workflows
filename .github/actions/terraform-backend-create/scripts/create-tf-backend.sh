@@ -717,23 +717,39 @@ setup_azure_backup() {
         log "INFO" "✅ Successfully assigned Backup Contributor role"
     fi
 
+    # Create and enable backup protection if not enabled
     if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
         log "INFO" "🔒 Enabling backup protection for storage account $STORAGE_ACCOUNT..."
-        local backup_result=$(az dataprotection backup-instance create \
-            --resource-group $RESOURCE_GROUP \
-            --vault-name $BACKUP_VAULT_NAME \
-            --backup-instance @$output_file 2>&1)
         
-        if [ $? -eq 0 ]; then
+        # Verify the JSON file exists
+        local output_file="$GITHUB_ACTION_PATH/policy/backup-instance.json"
+        if [ ! -f "$output_file" ]; then
+            log "ERROR" "❌ Backup instance JSON file not found at: $output_file"
+            return 1
+        fi
+
+        # Log the content of the JSON file for debugging
+        log "DEBUG" "Using backup instance configuration:"
+        cat "$output_file"
+
+        # Try to create backup instance with explicit name
+        local backup_result=$(az dataprotection backup-instance create \
+            --resource-group "$RESOURCE_GROUP" \
+            --vault-name "$BACKUP_VAULT_NAME" \
+            --name "$BACKUP_INSTANCE_NAME" \
+            --backup-instance @"$output_file" 2>&1)
+        
+        local exit_code=$?
+        
+        if [ $exit_code -eq 0 ]; then
             log "INFO" "✅ Successfully enabled Azure Backup for storage account $STORAGE_ACCOUNT"
         elif echo "$backup_result" | grep -q "Datasource is already protected"; then
             log "INFO" "ℹ️ Datasource is already protected - no action needed"
         else
             log "ERROR" "❌ Failed to enable backup protection: $backup_result"
+            log "ERROR" "Full error message: $backup_result"
             return 1
         fi
-    else
-        log "INFO" "ℹ️ Backup protection is already enabled for storage account $STORAGE_ACCOUNT"
     fi
 
     log "INFO" "✅ Azure Backup setup completed successfully"
