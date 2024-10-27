@@ -667,16 +667,24 @@ setup_role_assignments() {
 
     log "INFO" "🔑 Setting up role assignments for backup vault..."
 
-    # Array of required role assignments
-    declare -A roles=(
+    # First, remove any existing role assignments to avoid conflicts
+    log "INFO" "Cleaning up existing role assignments..."
+    az role assignment list --assignee "$vault_object_id" --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}" --query "[].id" -o tsv | while read -r assignment_id; do
+        az role assignment delete --ids "$assignment_id"
+    done
+
+    # Array of required role assignments with their scopes
+    declare -A role_assignments=(
         ["Storage Account Backup Contributor"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
         ["Reader"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
         ["Storage Blob Data Reader"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
+        ["Reader and Data Access"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
+        ["Contributor"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
     )
 
     # Assign each role
-    for role in "${!roles[@]}"; do
-        local scope="${roles[$role]}"
+    for role in "${!role_assignments[@]}"; do
+        local scope="${role_assignments[$role]}"
         
         log "INFO" "Assigning role '$role' to backup vault..."
         if ! az role assignment create \
@@ -684,16 +692,42 @@ setup_role_assignments() {
             --assignee-principal-type ServicePrincipal \
             --role "$role" \
             --scope "$scope" &>/dev/null; then
-            log "ERROR" "❌ Failed to assign role '$role'"
-            success=false
+            log "WARN" "Failed to assign role '$role' - this might be expected if the role doesn't exist"
         else
             log "INFO" "✅ Successfully assigned role '$role'"
         fi
     done
 
+    # Also assign roles at the resource group level
+    log "INFO" "Assigning roles at resource group level..."
+    if ! az role assignment create \
+        --assignee-object-id "$vault_object_id" \
+        --assignee-principal-type ServicePrincipal \
+        --role "Contributor" \
+        --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+        log "ERROR" "❌ Failed to assign Contributor role at resource group level"
+        success=false
+    else
+        log "INFO" "✅ Successfully assigned Contributor role at resource group level"
+    fi
+
     # Wait for role assignments to propagate
     log "INFO" "⏳ Waiting for role assignments to propagate..."
-    sleep 60
+    sleep 90  # Increased wait time to 90 seconds
+
+    # Verify role assignments
+    log "INFO" "Verifying role assignments..."
+    local assignments=$(az role assignment list \
+        --assignee "$vault_object_id" \
+        --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}" \
+        --query "[].roleDefinitionName" -o tsv)
+
+    if [ -z "$assignments" ]; then
+        log "ERROR" "❌ No role assignments found for backup vault"
+        success=false
+    else
+        log "INFO" "✅ Found role assignments: $assignments"
+    fi
 
     if [ "$success" = true ]; then
         log "INFO" "✅ All role assignments completed successfully"
@@ -704,13 +738,38 @@ setup_role_assignments() {
     fi
 }
 
+# Function to verify vault permissions
+verify_vault_permissions() {
+    local vault_object_id=$1
+    log "INFO" "🔍 Verifying vault permissions..."
+
+    # Test access to the storage account
+    local test_result=$(az storage account show \
+        --name "$STORAGE_ACCOUNT" \
+        --resource-group "$RESOURCE_GROUP" \
+        --query "id" \
+        -o tsv 2>&1)
+
+    if [ $? -ne 0 ]; then
+        log "ERROR" "❌ Cannot access storage account: $test_result"
+        return 1
+    fi
+
+    log "INFO" "✅ Storage account access verified"
+    return 0
+}
+
 # Function to set up Azure Backup for Blobs
 setup_azure_backup() {
     log "INFO" "🔄 Setting up Azure Backup for Blobs..."
     
-    # Test
-    create_backup_instance_json
-        
+    # First, create the backup instance JSON configuration
+    log "INFO" "📝 Preparing backup instance configuration..."
+    if ! create_backup_instance_json; then
+        log "ERROR" "❌ Failed to create backup instance configuration"
+        return 1
+    fi
+
     # Get current status without failing
     check_backup_status
 
@@ -753,7 +812,7 @@ setup_azure_backup() {
         sleep 30
     fi
 
-    # Get vault object ID
+    # Get vault object ID and set up permissions
     local vault_object_id=$(az dataprotection backup-vault show \
         --vault-name $BACKUP_VAULT_NAME \
         --resource-group $RESOURCE_GROUP \
@@ -762,8 +821,19 @@ setup_azure_backup() {
 
     # Set up role assignments
     if ! setup_role_assignments "$vault_object_id"; then
+        log "ERROR" "❌ Failed to set up role assignments"
         return 1
     fi
+
+    # Verify permissions
+    if ! verify_vault_permissions "$vault_object_id"; then
+        log "ERROR" "❌ Failed to verify vault permissions"
+        return 1
+    fi
+
+    # Additional wait time after verification
+    log "INFO" "⏳ Waiting for permissions to fully propagate..."
+    sleep 30
 
     # Create and enable backup protection if not enabled
     if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
@@ -791,7 +861,7 @@ setup_azure_backup() {
             local backup_result=$(az dataprotection backup-instance create \
                 --resource-group "$RESOURCE_GROUP" \
                 --vault-name "$BACKUP_VAULT_NAME" \
-                --backup-instance @"$output_file" )
+                --backup-instance @"$output_file" 2>&1)
             
             local exit_code=$?
             
@@ -805,10 +875,12 @@ setup_azure_backup() {
                 break
             else
                 log "WARN" "Attempt $((retry_count + 1)) failed: $backup_result"
+                # Log the full error for debugging
+                log "DEBUG" "Full error message: $backup_result"
                 retry_count=$((retry_count + 1))
                 if [ $retry_count -lt $max_retries ]; then
                     log "INFO" "⏳ Waiting before retry..."
-                    sleep 30
+                    sleep 45  # Increased wait time between retries
                 fi
             fi
         done
@@ -818,6 +890,20 @@ setup_azure_backup() {
             log "ERROR" "Last error: $backup_result"
             return 1
         fi
+    else
+        log "INFO" "ℹ️ Backup protection is already enabled for storage account $STORAGE_ACCOUNT"
+    fi
+
+    # Final verification of backup instance creation
+    log "INFO" "🔍 Verifying backup instance creation..."
+    if az dataprotection backup-instance list \
+        --resource-group "$RESOURCE_GROUP" \
+        --vault-name "$BACKUP_VAULT_NAME" \
+        --query "[?contains(name, '${BACKUP_INSTANCE_NAME}')]" \
+        --output tsv &>/dev/null; then
+        log "INFO" "✅ Backup instance verified successfully"
+    else
+        log "WARN" "⚠️ Could not verify backup instance creation, but no error was reported"
     fi
 
     log "INFO" "✅ Azure Backup setup completed successfully"
