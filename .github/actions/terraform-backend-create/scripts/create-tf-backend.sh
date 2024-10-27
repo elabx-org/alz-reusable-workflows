@@ -65,7 +65,7 @@ log() {
 }
 
 # Function to create backup instance JSON from template
-create_backup_instance_json()
+create_backup_instance_json() {
     local template_file="$GITHUB_ACTION_PATH/policy/backup-instance-template.json"
     local output_file="$GITHUB_ACTION_PATH/policy/backup-instance.json"
 
@@ -141,7 +141,7 @@ setup_backup_variables() {
     fi
 
     BACKUP_USE="tfstate"
-    POLICY_FILE="$GITHUB_ACTION_PATH/policy/backup-policy.json"
+    POLICY_FILE="backup-policy.json"
     BACKUP_VAULT_NAME="bvault-${SVC_NAME}-${ENV_SHORT}-${BACKUP_USE}-${LOCATION_SHORT}-001"
     BACKUP_POLICY_NAME="bkpol-${SVC_NAME}-${ENV_SHORT}-${BACKUP_USE}-${LOCATION_SHORT}-001"
     BACKUP_INSTANCE_NAME="bki-${SVC_NAME}-${ENV_SHORT}-${BACKUP_USE}-${LOCATION_SHORT}-001"
