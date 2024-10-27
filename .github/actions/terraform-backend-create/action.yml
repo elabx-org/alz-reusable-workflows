@@ -33,26 +33,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Display Execution Mode
-      shell: bash
-      run: |
-        echo
-        echo "::group::⚠️ Execution Mode: ${{ 
-          inputs.mode == 'checks-only' && 'All Checks' ||
-          inputs.mode == 'backup-only' && 'Backup Checks Only' ||
-          inputs.mode == 'infra-only' && 'Infrastructure Checks Only' ||
-          'Create/Update'
-        }}"
-        echo "::notice::━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "::notice::🔍 EXECUTION MODE: ${{ 
-          inputs.mode == 'checks-only' && 'CHECKS ONLY - Running all checks (No changes will be made)' ||
-          inputs.mode == 'backup-only' && 'BACKUP CHECKS ONLY - Running backup checks (No changes will be made)' ||
-          inputs.mode == 'infra-only' && 'INFRASTRUCTURE CHECKS ONLY - Running infrastructure checks (No changes will be made)' ||
-          'CREATE/UPDATE MODE - Changes will be applied'
-        }}"
-        echo "::notice::━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "::endgroup::"
-
     - name: Azure Login
       uses: azure/login@v2
       with:
