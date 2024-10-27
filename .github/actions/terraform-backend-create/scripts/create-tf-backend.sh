@@ -737,7 +737,7 @@ setup_azure_backup() {
             --resource-group "$RESOURCE_GROUP" \
             --vault-name "$BACKUP_VAULT_NAME" \
             --name "$BACKUP_INSTANCE_NAME" \
-            --backup-instance @"$output_file" 2>&1)
+            --backup-instance @"$output_file")
         
         local exit_code=$?
         
