@@ -85,8 +85,10 @@ create_backup_instance_json() {
         -e "s/\${BACKUP_INSTANCE_NAME}/${BACKUP_INSTANCE_NAME}/g" \
         "$template_file" > "$output_file"
 
+    # Add after the sed command in create_backup_instance_json()
     if [ $? -eq 0 ]; then
-        log "INFO" "✅ Successfully created backup instance configuration"
+        log "INFO" "✅ Successfully created backup instance configuration:"
+        cat "$output_file"
         return 0
     else
         log "ERROR" "❌ Failed to create backup instance configuration"
