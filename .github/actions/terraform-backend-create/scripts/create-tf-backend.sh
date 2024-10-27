@@ -662,6 +662,8 @@ update_container_policies() {
 setup_azure_backup() {
     log "INFO" "🔄 Setting up Azure Backup for Blobs..."
     
+    # Test
+    create_backup_instance_json
     # Get current status without failing
     check_backup_status
 
