@@ -1,0 +1,26 @@
+{
+    "datasourceTypes": [
+      "Microsoft.Storage/storageAccounts/blobServices"
+    ],
+    "name": "BlobPolicy1",
+    "objectType": "BackupPolicy",
+    "policyRules": [
+      {
+        "isDefault": true,
+        "lifecycles": [
+          {
+            "deleteAfter": {
+              "duration": "P30D",
+              "objectType": "AbsoluteDeleteOption"
+            },
+            "sourceDataStore": {
+              "dataStoreType": "OperationalStore",
+              "objectType": "DataStoreInfoBase"
+            }
+          }
+        ],
+        "name": "Default",
+        "objectType": "AzureRetentionRule"
+      }
+    ]
+  }
