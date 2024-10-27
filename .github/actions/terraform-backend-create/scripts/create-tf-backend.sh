@@ -455,7 +455,6 @@ perform_checks_backup() {
 
         # Run checks
         log "INFO" "🔍 Checking backup status..."
-        log "INFO" "🔍 Checking if dataprotection extension is installed..."
         ensure_dataprotection_extension
 
         # Check if the backup vault exists
