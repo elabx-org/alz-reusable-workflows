@@ -732,21 +732,42 @@ setup_azure_backup() {
         log "DEBUG" "Using backup instance configuration:"
         cat "$output_file"
 
-        # Try to create backup instance without the name parameter
-        local backup_result=$(az dataprotection backup-instance create \
-            --resource-group "$RESOURCE_GROUP" \
-            --vault-name "$BACKUP_VAULT_NAME" \
-            --backup-instance @"$output_file")
-        
-        local exit_code=$?
-        
-        if [ $exit_code -eq 0 ]; then
-            log "INFO" "✅ Successfully enabled Azure Backup for storage account $STORAGE_ACCOUNT"
-        elif echo "$backup_result" | grep -q "Datasource is already protected"; then
-            log "INFO" "ℹ️ Datasource is already protected - no action needed"
-        else
-            log "ERROR" "❌ Failed to enable backup protection: $backup_result"
-            log "ERROR" "Full error message: $backup_result"
+        # Try to create backup instance
+        local max_retries=3
+        local retry_count=0
+        local success=false
+
+        while [ $retry_count -lt $max_retries ] && [ "$success" = false ]; do
+            log "INFO" "Attempting to create backup instance (attempt $((retry_count + 1))/$max_retries)..."
+            
+            local backup_result=$(az dataprotection backup-instance create \
+                --resource-group "$RESOURCE_GROUP" \
+                --vault-name "$BACKUP_VAULT_NAME" \
+                --backup-instance @"$output_file" 2>&1)
+            
+            local exit_code=$?
+            
+            if [ $exit_code -eq 0 ]; then
+                success=true
+                log "INFO" "✅ Successfully enabled Azure Backup for storage account $STORAGE_ACCOUNT"
+                break
+            elif echo "$backup_result" | grep -q "Datasource is already protected"; then
+                success=true
+                log "INFO" "ℹ️ Datasource is already protected - no action needed"
+                break
+            else
+                log "WARN" "Attempt $((retry_count + 1)) failed: $backup_result"
+                retry_count=$((retry_count + 1))
+                if [ $retry_count -lt $max_retries ]; then
+                    log "INFO" "⏳ Waiting before retry..."
+                    sleep 30
+                fi
+            fi
+        done
+
+        if [ "$success" = false ]; then
+            log "ERROR" "❌ Failed to enable backup protection after $max_retries attempts"
+            log "ERROR" "Last error: $backup_result"
             return 1
         fi
     fi

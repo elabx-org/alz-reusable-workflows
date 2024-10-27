@@ -1,4 +1,5 @@
 {
+  "backup_instance_name": "${BACKUP_INSTANCE_NAME}",
   "properties": {
     "dataSourceInfo": {
       "datasourceType": "Microsoft.Storage/storageAccounts/blobServices",
@@ -21,6 +22,6 @@
       }
     },
     "objectType": "BackupInstance",
-    "friendlyName": "${BACKUP_INSTANCE_NAME}"
+    "friendlyName": "${STORAGE_ACCOUNT}"
   }
 }
