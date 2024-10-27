@@ -720,7 +720,7 @@ setup_azure_backup() {
         local backup_result=$(az dataprotection backup-instance create \
             --resource-group $RESOURCE_GROUP \
             --vault-name $BACKUP_VAULT_NAME \
-            --backup-instance @output_file 2>&1)
+            --backup-instance @$output_file 2>&1)
         
         if [ $? -eq 0 ]; then
             log "INFO" "✅ Successfully enabled Azure Backup for storage account $STORAGE_ACCOUNT"
