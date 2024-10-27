@@ -141,7 +141,7 @@ setup_backup_variables() {
     fi
 
     BACKUP_USE="tfstate"
-    POLICY_FILE="backup-policy.json"
+    POLICY_FILE="$GITHUB_ACTION_PATH/policy/backup-policy.json"
     BACKUP_VAULT_NAME="bvault-${SVC_NAME}-${ENV_SHORT}-${BACKUP_USE}-${LOCATION_SHORT}-001"
     BACKUP_POLICY_NAME="bkpol-${SVC_NAME}-${ENV_SHORT}-${BACKUP_USE}-${LOCATION_SHORT}-001"
     BACKUP_INSTANCE_NAME="bki-${SVC_NAME}-${ENV_SHORT}-${BACKUP_USE}-${LOCATION_SHORT}-001"
