@@ -95,7 +95,7 @@ create_backup_instance_json() {
 }
 
 # Function to ensure Azure CLI dataprotection extension is installed
-ensure_dataprotection_extension() {
+install_dataprotection_extension() {
     log "INFO" "🔍 Checking if dataprotection extension is installed..."
     if ! az extension show --name dataprotection &>/dev/null; then
         log "INFO" "🔄 Installing dataprotection extension..."
@@ -377,7 +377,7 @@ check_backup_status() {
     BACKUP_PROTECTION_ENABLED=false
 
     # Install the dataprotection extension
-    ensure_dataprotection_extension
+    install_dataprotection_extension
 
     # Check if the backup vault exists
     log "INFO" "🔍 Checking if Backup Vault exists..."
@@ -455,7 +455,7 @@ perform_checks_backup() {
 
         # Run checks
         log "INFO" "🔍 Checking backup status..."
-        ensure_dataprotection_extension
+        install_dataprotection_extension
 
         # Check if the backup vault exists
         log "INFO" "🔍 Checking if Backup Vault exists..."
