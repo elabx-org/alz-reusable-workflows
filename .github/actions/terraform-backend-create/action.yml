@@ -69,6 +69,7 @@ runs:
         SETUP_AZURE_BACKUP: ${{ inputs.setup_azure_backup }}
         ARM_USE_OIDC: true
       run: |
+          echo
           bash ${{ github.action_path }}/scripts/create-tf-backend.sh ${{ inputs.mode }}
 
     - name: Azure Logout
