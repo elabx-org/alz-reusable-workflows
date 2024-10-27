@@ -699,7 +699,7 @@ setup_azure_backup() {
     fi
 
     if [ "$ROLE_ASSIGNED" = false ]; then
-        log "INFO" "🔑 Assigning Storage Account Backup Contributor role..."
+        log "INFO" "Assigning Storage Account Backup Contributor role..."
         local vault_object_id=$(az dataprotection backup-vault show \
             --vault-name $BACKUP_VAULT_NAME \
             --resource-group $RESOURCE_GROUP \
@@ -711,12 +711,10 @@ setup_azure_backup() {
             --assignee-principal-type ServicePrincipal \
             --role "Storage Account Backup Contributor" \
             --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"; then
-            log "ERROR" "❌ Failed to assign Storage Account Backup Contributor role"
+            log "ERROR" "Failed to assign Storage Account Backup Contributor role"
             return 1
         fi
-        log "INFO" "✅ Successfully assigned Backup Contributor role"
     fi
-
     # Create and enable backup protection if not enabled
     if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
         log "INFO" "🔒 Enabling backup protection for storage account $STORAGE_ACCOUNT..."
