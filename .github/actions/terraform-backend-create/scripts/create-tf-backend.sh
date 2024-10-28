@@ -85,10 +85,8 @@ create_backup_instance_json() {
         -e "s/\${BACKUP_INSTANCE_NAME}/${BACKUP_INSTANCE_NAME}/g" \
         "$template_file" > "$output_file"
 
-    # Add after the sed command in create_backup_instance_json()
     if [ $? -eq 0 ]; then
-        log "INFO" "✅ Successfully created backup instance configuration:"
-        cat "$output_file"
+        log "INFO" "✅ Successfully created backup instance configuration"
         return 0
     else
         log "ERROR" "❌ Failed to create backup instance configuration"
@@ -221,13 +219,46 @@ check_network_rules() {
 # Function to check blob service properties
 check_blob_service_properties() {
     log "INFO" "🔍 Checking blob service properties..."
-    local properties=$(az storage blob service-properties show --account-name $STORAGE_ACCOUNT --auth-mode login -o json)
-    local delete_retention_enabled=$(echo $properties | jq -r '.deleteRetentionPolicy.enabled')
-    local delete_retention_days=$(echo $properties | jq -r '.deleteRetentionPolicy.days')
 
-    if [[ "$delete_retention_enabled" == "true" && "$delete_retention_days" == "90" ]]; then
+    local api_version="2023-01-01"
+    local storage_url="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT/blobServices/default"
+
+    # Get current properties using az rest
+    local properties
+    properties=$(az rest --method GET \
+        --uri "https://management.azure.com$storage_url?api-version=$api_version" \
+        --query "properties")
+
+    if [ -z "$properties" ]; then
+        log "ERROR" "❌ Failed to get blob properties"
+        return 1
+    fi
+
+    # Extract all property values
+    local delete_retention_enabled=$(echo "$properties" | jq -r '.deleteRetentionPolicy.enabled')
+    local delete_retention_days=$(echo "$properties" | jq -r '.deleteRetentionPolicy.days')
+    local container_delete_retention_enabled=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.enabled')
+    local container_delete_retention_days=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.days')
+    local change_feed_enabled=$(echo "$properties" | jq -r '.changeFeed.enabled')
+    local change_feed_retention_days=$(echo "$properties" | jq -r '.changeFeed.retentionInDays')
+    local versioning_enabled=$(echo "$properties" | jq -r '.isVersioningEnabled')
+    local restore_policy_enabled=$(echo "$properties" | jq -r '.restorePolicy.enabled')
+    local restore_days=$(echo "$properties" | jq -r '.restorePolicy.days')
+
+    # Check if all properties match expected values
+    if [[ "$delete_retention_enabled" == "true" && 
+          "$delete_retention_days" == "90" &&
+          "$container_delete_retention_enabled" == "true" &&
+          "$container_delete_retention_days" == "90" &&
+          "$change_feed_enabled" == "true" &&
+          "$change_feed_retention_days" == "90" &&
+          "$versioning_enabled" == "true" &&
+          "$restore_policy_enabled" == "true" &&
+          "$restore_days" == "89" ]]; then
+        log "INFO" "✅ Blob properties are correctly configured"
         return 0
     else
+        log "INFO" "⚠️ One or more blob properties need updating"
         return 1
     fi
 }
@@ -235,14 +266,29 @@ check_blob_service_properties() {
 # Function to check container service properties
 check_container_service_properties() {
     log "INFO" "🔍 Checking container service properties..."
-    local properties=$(az storage account blob-service-properties show --account-name $STORAGE_ACCOUNT --resource-group $RESOURCE_GROUP -o json)
-    local container_delete_retention_enabled=$(echo $properties | jq -r '.containerDeleteRetentionPolicy.enabled')
-    local container_delete_retention_days=$(echo $properties | jq -r '.containerDeleteRetentionPolicy.days')
-    local change_feed_enabled=$(echo $properties | jq -r '.changeFeed.enabled')
-    local change_feed_retention_days=$(echo $properties | jq -r '.changeFeed.retentionInDays')
-    local versioning_enabled=$(echo $properties | jq -r '.isVersioningEnabled')
-    local restore_policy_enabled=$(echo $properties | jq -r '.restorePolicy.enabled')
-    local restore_days=$(echo $properties | jq -r '.restorePolicy.days')
+
+    local api_version="2023-01-01"
+    local storage_url="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT/blobServices/default"
+
+    # Get current properties
+    local properties
+    properties=$(az rest --method GET \
+        --uri "https://management.azure.com$storage_url?api-version=$api_version" \
+        --query "properties")
+
+    if [ -z "$properties" ]; then
+        log "ERROR" "❌ Failed to get container properties"
+        return 1
+    fi
+
+    # Extract and check all required properties
+    local container_delete_retention_enabled=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.enabled')
+    local container_delete_retention_days=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.days')
+    local change_feed_enabled=$(echo "$properties" | jq -r '.changeFeed.enabled')
+    local change_feed_retention_days=$(echo "$properties" | jq -r '.changeFeed.retentionInDays')
+    local versioning_enabled=$(echo "$properties" | jq -r '.isVersioningEnabled')
+    local restore_policy_enabled=$(echo "$properties" | jq -r '.restorePolicy.enabled')
+    local restore_days=$(echo "$properties" | jq -r '.restorePolicy.days')
 
     if [[ "$container_delete_retention_enabled" == "true" && 
           "$container_delete_retention_days" == "90" &&
@@ -256,6 +302,7 @@ check_container_service_properties() {
         return 1
     fi
 }
+
 
 # Function to perform all checks
 perform_checks() {
@@ -623,157 +670,112 @@ create_container() {
 
 # Function to update blob policies
 update_blob_policies() {
-    # Retrieve storage account key
-    STORAGE_KEY=$(az storage account keys list --resource-group $RESOURCE_GROUP --account-name $STORAGE_ACCOUNT --query '[0].value' --output tsv)
+    log "INFO" "🔄 Checking if blob policies need updating..."
+    
     if ! check_blob_service_properties; then
-        log "INFO" "🔄 Updating blob policies..."
-        az storage blob service-properties delete-policy update \
-            --account-name $STORAGE_ACCOUNT \
-            --account-key $STORAGE_KEY \
-            --enable true \
-            --days-retained 90 \
-            --output none
-        log "INFO" "✅ Successfully updated blob policies"
+        log "INFO" "🔄 Updating blob service properties..."
+
+        local api_version="2023-01-01"
+        local storage_url="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT/blobServices/default"
+
+        # Update properties using az rest
+        if az rest --method PUT \
+            --uri "https://management.azure.com$storage_url?api-version=$api_version" \
+            --body '{
+                "properties": {
+                    "deleteRetentionPolicy": {
+                        "enabled": true,
+                        "days": 90
+                    },
+                    "containerDeleteRetentionPolicy": {
+                        "enabled": true,
+                        "days": 90
+                    },
+                    "changeFeed": {
+                        "enabled": true,
+                        "retentionInDays": 90
+                    },
+                    "isVersioningEnabled": true,
+                    "restorePolicy": {
+                        "enabled": true,
+                        "days": 89
+                    }
+                }
+            }' --output none; then
+            log "INFO" "✅ Successfully updated blob service properties"
+            
+            # Verify the changes
+            if check_blob_service_properties; then
+                log "INFO" "✅ Verified blob properties are correctly configured"
+                return 0
+            else
+                log "ERROR" "❌ Verification failed after update"
+                return 1
+            fi
+        else
+            log "ERROR" "❌ Failed to update blob service properties"
+            return 1
+        fi
     else
-        log "INFO" "ℹ️ Blob policies are already configured correctly"
+        log "INFO" "ℹ️ Blob properties are already configured correctly"
+        return 0
     fi
 }
 
 # Function to update container policies
 update_container_policies() {
     if ! check_container_service_properties; then
-        log "INFO" "🔄 Updating container policies..."
-        az storage account blob-service-properties update \
-            --account-name $STORAGE_ACCOUNT \
-            --resource-group $RESOURCE_GROUP \
-            --enable-container-delete-retention true \
-            --container-delete-retention-days 90 \
-            --enable-change-feed true \
-            --change-feed-retention-days 90 \
-            --enable-versioning true \
-            --enable-restore-policy true \
-            --restore-days 89 \
-            --output none
-        log "INFO" "✅ Successfully updated container policies"
-    else
-        log "INFO" "ℹ️ Container policies are already configured correctly"
-    fi
-}
+        log "INFO" "🔄 Updating container properties..."
 
-# Function to set up role assignments
-setup_role_assignments() {
-    local vault_object_id=$1
-    local success=true
+        local api_version="2023-01-01"
+        local storage_url="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT/blobServices/default"
 
-    log "INFO" "🔑 Setting up role assignments for backup vault..."
-
-    # First, remove any existing role assignments to avoid conflicts
-    log "INFO" "Cleaning up existing role assignments..."
-    az role assignment list --assignee "$vault_object_id" --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}" --query "[].id" -o tsv | while read -r assignment_id; do
-        az role assignment delete --ids "$assignment_id"
-    done
-
-    # Array of required role assignments with their scopes
-    declare -A role_assignments=(
-        ["Storage Account Backup Contributor"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
-        ["Reader"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
-        ["Storage Blob Data Reader"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
-        ["Reader and Data Access"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
-        ["Contributor"]="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
-    )
-
-    # Assign each role
-    for role in "${!role_assignments[@]}"; do
-        local scope="${role_assignments[$role]}"
-        
-        log "INFO" "Assigning role '$role' to backup vault..."
-        if ! az role assignment create \
-            --assignee-object-id "$vault_object_id" \
-            --assignee-principal-type ServicePrincipal \
-            --role "$role" \
-            --scope "$scope" &>/dev/null; then
-            log "WARN" "Failed to assign role '$role' - this might be expected if the role doesn't exist"
+        # Update properties using az rest
+        if az rest --method PUT \
+            --uri "https://management.azure.com$storage_url?api-version=$api_version" \
+            --body '{
+                "properties": {
+                    "containerDeleteRetentionPolicy": {
+                        "enabled": true,
+                        "days": 90
+                    },
+                    "changeFeed": {
+                        "enabled": true,
+                        "retentionInDays": 90
+                    },
+                    "isVersioningEnabled": true,
+                    "restorePolicy": {
+                        "enabled": true,
+                        "days": 89
+                    }
+                }
+            }' --output none; then
+            log "INFO" "✅ Successfully updated container properties"
+            
+            # Verify the changes
+            if check_container_service_properties; then
+                log "INFO" "✅ Verified container properties are correctly configured"
+                return 0
+            else
+                log "ERROR" "❌ Verification failed after update"
+                return 1
+            fi
         else
-            log "INFO" "✅ Successfully assigned role '$role'"
+            log "ERROR" "❌ Failed to update container properties"
+            return 1
         fi
-    done
-
-    # Also assign roles at the resource group level
-    log "INFO" "Assigning roles at resource group level..."
-    if ! az role assignment create \
-        --assignee-object-id "$vault_object_id" \
-        --assignee-principal-type ServicePrincipal \
-        --role "Contributor" \
-        --resource-group "$RESOURCE_GROUP" &>/dev/null; then
-        log "ERROR" "❌ Failed to assign Contributor role at resource group level"
-        success=false
     else
-        log "INFO" "✅ Successfully assigned Contributor role at resource group level"
+        log "INFO" "ℹ️ Container properties are already configured correctly"
     fi
-
-    # Wait for role assignments to propagate
-    log "INFO" "⏳ Waiting for role assignments to propagate..."
-    sleep 90  # Increased wait time to 90 seconds
-
-    # Verify role assignments
-    log "INFO" "Verifying role assignments..."
-    local assignments=$(az role assignment list \
-        --assignee "$vault_object_id" \
-        --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}" \
-        --query "[].roleDefinitionName" -o tsv)
-
-    if [ -z "$assignments" ]; then
-        log "ERROR" "❌ No role assignments found for backup vault"
-        success=false
-    else
-        log "INFO" "✅ Found role assignments: $assignments"
-    fi
-
-    if [ "$success" = true ]; then
-        log "INFO" "✅ All role assignments completed successfully"
-        return 0
-    else
-        log "ERROR" "❌ One or more role assignments failed"
-        return 1
-    fi
-}
-
-# Function to verify vault permissions
-verify_vault_permissions() {
-    local vault_object_id=$1
-    log "INFO" "🔍 Verifying vault permissions..."
-
-    # Test access to the storage account
-    local test_result=$(az storage account show \
-        --name "$STORAGE_ACCOUNT" \
-        --resource-group "$RESOURCE_GROUP" \
-        --query "id" \
-        -o tsv 2>&1)
-
-    if [ $? -ne 0 ]; then
-        log "ERROR" "❌ Cannot access storage account: $test_result"
-        return 1
-    fi
-
-    log "INFO" "✅ Storage account access verified"
-    return 0
 }
 
 # Function to set up Azure Backup for Blobs
 setup_azure_backup() {
     log "INFO" "🔄 Setting up Azure Backup for Blobs..."
     
-    # First, create the backup instance JSON configuration
-    log "INFO" "📝 Preparing backup instance configuration..."
-    if ! create_backup_instance_json; then
-        log "ERROR" "❌ Failed to create backup instance configuration"
-        return 1
-    fi
-
     # Get current status without failing
     check_backup_status
 
-    # Create Backup Vault if it doesn't exist
     if [ "$VAULT_EXISTS" = false ]; then
         log "INFO" "🏗️ Creating Backup Vault $BACKUP_VAULT_NAME..."
         if ! az dataprotection backup-vault create \
@@ -788,13 +790,8 @@ setup_azure_backup() {
             return 1
         fi
         log "INFO" "✅ Successfully created Backup Vault"
-        
-        # Wait for vault identity to propagate
-        log "INFO" "⏳ Waiting for vault identity to propagate..."
-        sleep 30
     fi
 
-    # Create Backup Policy if it doesn't exist
     if [ "$POLICY_EXISTS" = false ]; then
         log "INFO" "📝 Creating backup policy $BACKUP_POLICY_NAME..."
         if ! az dataprotection backup-policy create \
@@ -806,104 +803,44 @@ setup_azure_backup() {
             return 1
         fi
         log "INFO" "✅ Successfully created backup policy"
-        
-        # Wait for policy to propagate
-        log "INFO" "⏳ Waiting for policy to propagate..."
-        sleep 30
     fi
 
-    # Get vault object ID and set up permissions
-    local vault_object_id=$(az dataprotection backup-vault show \
-        --vault-name $BACKUP_VAULT_NAME \
-        --resource-group $RESOURCE_GROUP \
-        --query identity.principalId \
-        --output tsv)
-
-    # Set up role assignments
-    if ! setup_role_assignments "$vault_object_id"; then
-        log "ERROR" "❌ Failed to set up role assignments"
-        return 1
-    fi
-
-    # Verify permissions
-    if ! verify_vault_permissions "$vault_object_id"; then
-        log "ERROR" "❌ Failed to verify vault permissions"
-        return 1
-    fi
-
-    # Additional wait time after verification
-    log "INFO" "⏳ Waiting for permissions to fully propagate..."
-    sleep 30
-
-    # Create and enable backup protection if not enabled
-    if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
-        log "INFO" "🔒 Enabling backup protection for storage account $STORAGE_ACCOUNT..."
-        
-        # Verify the JSON file exists
-        local output_file="$GITHUB_ACTION_PATH/policy/backup-instance.json"
-        if [ ! -f "$output_file" ]; then
-            log "ERROR" "❌ Backup instance JSON file not found at: $output_file"
+    if [ "$ROLE_ASSIGNED" = false ]; then
+        log "INFO" "🔑 Assigning Storage Account Backup Contributor role..."
+        local vault_object_id=$(az dataprotection backup-vault show \
+            --vault-name $BACKUP_VAULT_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --query identity.principalId \
+            --output tsv)
+            
+        if ! az role assignment create \
+            --assignee-object-id $vault_object_id \
+            --assignee-principal-type ServicePrincipal \
+            --role "Storage Account Backup Contributor" \
+            --scope "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"; then
+            log "ERROR" "❌ Failed to assign Storage Account Backup Contributor role"
             return 1
         fi
+        log "INFO" "✅ Successfully assigned Backup Contributor role"
+    fi
 
-        # Log the content of the JSON file for debugging
-        log "DEBUG" "Using backup instance configuration:"
-        cat "$output_file"
-
-        # Try to create backup instance with retries
-        local max_retries=3
-        local retry_count=0
-        local success=false
-
-        while [ $retry_count -lt $max_retries ] && [ "$success" = false ]; do
-            log "INFO" "Attempting to create backup instance (attempt $((retry_count + 1))/$max_retries)..."
-            
-            local backup_result=$(az dataprotection backup-instance create \
-                --resource-group "$RESOURCE_GROUP" \
-                --vault-name "$BACKUP_VAULT_NAME" \
-                --backup-instance @"$output_file" 2>&1)
-            
-            local exit_code=$?
-            
-            if [ $exit_code -eq 0 ]; then
-                success=true
-                log "INFO" "✅ Successfully enabled Azure Backup for storage account $STORAGE_ACCOUNT"
-                break
-            elif echo "$backup_result" | grep -q "Datasource is already protected"; then
-                success=true
-                log "INFO" "ℹ️ Datasource is already protected - no action needed"
-                break
-            else
-                log "WARN" "Attempt $((retry_count + 1)) failed: $backup_result"
-                # Log the full error for debugging
-                log "DEBUG" "Full error message: $backup_result"
-                retry_count=$((retry_count + 1))
-                if [ $retry_count -lt $max_retries ]; then
-                    log "INFO" "⏳ Waiting before retry..."
-                    sleep 45  # Increased wait time between retries
-                fi
-            fi
-        done
-
-        if [ "$success" = false ]; then
-            log "ERROR" "❌ Failed to enable backup protection after $max_retries attempts"
-            log "ERROR" "Last error: $backup_result"
+    if [ "$BACKUP_PROTECTION_ENABLED" = false ]; then
+        log "INFO" "🔒 Enabling backup protection for storage account $STORAGE_ACCOUNT..."
+        local backup_result=$(az dataprotection backup-instance create \
+            --resource-group $RESOURCE_GROUP \
+            --vault-name $BACKUP_VAULT_NAME \
+            --backup-instance @backup-instance.json 2>&1)
+        
+        if [ $? -eq 0 ]; then
+            log "INFO" "✅ Successfully enabled Azure Backup for storage account $STORAGE_ACCOUNT"
+        elif echo "$backup_result" | grep -q "Datasource is already protected"; then
+            log "INFO" "ℹ️ Datasource is already protected - no action needed"
+        else
+            log "ERROR" "❌ Failed to enable backup protection: $backup_result"
             return 1
         fi
     else
         log "INFO" "ℹ️ Backup protection is already enabled for storage account $STORAGE_ACCOUNT"
-    fi
-
-    # Final verification of backup instance creation
-    log "INFO" "🔍 Verifying backup instance creation..."
-    if az dataprotection backup-instance list \
-        --resource-group "$RESOURCE_GROUP" \
-        --vault-name "$BACKUP_VAULT_NAME" \
-        --query "[?contains(name, '${BACKUP_INSTANCE_NAME}')]" \
-        --output tsv &>/dev/null; then
-        log "INFO" "✅ Backup instance verified successfully"
-    else
-        log "WARN" "⚠️ Could not verify backup instance creation, but no error was reported"
     fi
 
     log "INFO" "✅ Azure Backup setup completed successfully"
