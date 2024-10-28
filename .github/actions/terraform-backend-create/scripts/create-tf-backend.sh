@@ -216,94 +216,6 @@ check_network_rules() {
     fi
 }
 
-# Function to check blob service properties
-check_blob_service_properties() {
-    log "INFO" "🔍 Checking blob service properties..."
-
-    local api_version="2023-01-01"
-    local storage_url="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT/blobServices/default"
-
-    # Get current properties using az rest
-    local properties
-    properties=$(az rest --method GET \
-        --uri "https://management.azure.com$storage_url?api-version=$api_version" \
-        --query "properties")
-
-    if [ -z "$properties" ]; then
-        log "ERROR" "❌ Failed to get blob properties"
-        return 1
-    fi
-
-    # Extract all property values
-    local delete_retention_enabled=$(echo "$properties" | jq -r '.deleteRetentionPolicy.enabled')
-    local delete_retention_days=$(echo "$properties" | jq -r '.deleteRetentionPolicy.days')
-    local container_delete_retention_enabled=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.enabled')
-    local container_delete_retention_days=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.days')
-    local change_feed_enabled=$(echo "$properties" | jq -r '.changeFeed.enabled')
-    local change_feed_retention_days=$(echo "$properties" | jq -r '.changeFeed.retentionInDays')
-    local versioning_enabled=$(echo "$properties" | jq -r '.isVersioningEnabled')
-    local restore_policy_enabled=$(echo "$properties" | jq -r '.restorePolicy.enabled')
-    local restore_days=$(echo "$properties" | jq -r '.restorePolicy.days')
-
-    # Check if all properties match expected values
-    if [[ "$delete_retention_enabled" == "true" && 
-          "$delete_retention_days" == "90" &&
-          "$container_delete_retention_enabled" == "true" &&
-          "$container_delete_retention_days" == "90" &&
-          "$change_feed_enabled" == "true" &&
-          "$change_feed_retention_days" == "90" &&
-          "$versioning_enabled" == "true" &&
-          "$restore_policy_enabled" == "true" &&
-          "$restore_days" == "89" ]]; then
-        log "INFO" "✅ Blob properties are correctly configured"
-        return 0
-    else
-        log "INFO" "⚠️ One or more blob properties need updating"
-        return 1
-    fi
-}
-
-# Function to check container service properties
-check_container_service_properties() {
-    log "INFO" "🔍 Checking container service properties..."
-
-    local api_version="2023-01-01"
-    local storage_url="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT/blobServices/default"
-
-    # Get current properties
-    local properties
-    properties=$(az rest --method GET \
-        --uri "https://management.azure.com$storage_url?api-version=$api_version" \
-        --query "properties")
-
-    if [ -z "$properties" ]; then
-        log "ERROR" "❌ Failed to get container properties"
-        return 1
-    fi
-
-    # Extract and check all required properties
-    local container_delete_retention_enabled=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.enabled')
-    local container_delete_retention_days=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.days')
-    local change_feed_enabled=$(echo "$properties" | jq -r '.changeFeed.enabled')
-    local change_feed_retention_days=$(echo "$properties" | jq -r '.changeFeed.retentionInDays')
-    local versioning_enabled=$(echo "$properties" | jq -r '.isVersioningEnabled')
-    local restore_policy_enabled=$(echo "$properties" | jq -r '.restorePolicy.enabled')
-    local restore_days=$(echo "$properties" | jq -r '.restorePolicy.days')
-
-    if [[ "$container_delete_retention_enabled" == "true" && 
-          "$container_delete_retention_days" == "90" &&
-          "$change_feed_enabled" == "true" &&
-          "$change_feed_retention_days" == "90" &&
-          "$versioning_enabled" == "true" &&
-          "$restore_policy_enabled" == "true" &&
-          "$restore_days" == "89" ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-
 # Function to perform all checks
 perform_checks() {
     local backup_warnings=${1:-false}  # Pass backup warnings status, default to false
@@ -668,17 +580,64 @@ create_container() {
     fi
 }
 
-# Function to update blob policies
-update_blob_policies() {
-    log "INFO" "🔄 Checking if blob policies need updating..."
+# Function to check all storage policies
+check_storage_policies() {
+    log "INFO" "🔍 Checking storage service properties..."
+
+    local api_version="2023-01-01"
+    local storage_url="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT/blobServices/default"
+
+    # Get current properties
+    local properties
+    properties=$(az rest --method GET \
+        --uri "https://management.azure.com$storage_url?api-version=$api_version" \
+        --query "properties")
+
+    if [ -z "$properties" ]; then
+        log "ERROR" "❌ Failed to get storage properties"
+        return 1
+    fi
+
+    # Extract all property values
+    local delete_retention_enabled=$(echo "$properties" | jq -r '.deleteRetentionPolicy.enabled')
+    local delete_retention_days=$(echo "$properties" | jq -r '.deleteRetentionPolicy.days')
+    local container_delete_retention_enabled=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.enabled')
+    local container_delete_retention_days=$(echo "$properties" | jq -r '.containerDeleteRetentionPolicy.days')
+    local change_feed_enabled=$(echo "$properties" | jq -r '.changeFeed.enabled')
+    local change_feed_retention_days=$(echo "$properties" | jq -r '.changeFeed.retentionInDays')
+    local versioning_enabled=$(echo "$properties" | jq -r '.isVersioningEnabled')
+    local restore_policy_enabled=$(echo "$properties" | jq -r '.restorePolicy.enabled')
+    local restore_days=$(echo "$properties" | jq -r '.restorePolicy.days')
+
+    # Check if all properties match expected values
+    if [[ "$delete_retention_enabled" == "true" && 
+          "$delete_retention_days" == "90" &&
+          "$container_delete_retention_enabled" == "true" &&
+          "$container_delete_retention_days" == "90" &&
+          "$change_feed_enabled" == "true" &&
+          "$change_feed_retention_days" == "90" &&
+          "$versioning_enabled" == "true" &&
+          "$restore_policy_enabled" == "true" &&
+          "$restore_days" == "89" ]]; then
+        log "INFO" "✅ All storage properties are correctly configured"
+        return 0
+    else
+        log "INFO" "⚠️ One or more storage properties need updating"
+        return 1
+    fi
+}
+
+# Combined function to update all storage policies
+update_storage_policies() {
+    log "INFO" "🔄 Checking if storage policies need updating..."
     
-    if ! check_blob_service_properties; then
-        log "INFO" "🔄 Updating blob service properties..."
+    if ! check_storage_policies; then
+        log "INFO" "🔄 Updating storage service properties..."
 
         local api_version="2023-01-01"
         local storage_url="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT/blobServices/default"
 
-        # Update properties using az rest
+        # Update all properties in a single call
         if az rest --method PUT \
             --uri "https://management.azure.com$storage_url?api-version=$api_version" \
             --body '{
@@ -702,70 +661,23 @@ update_blob_policies() {
                     }
                 }
             }' --output none; then
-            log "INFO" "✅ Successfully updated blob service properties"
+            log "INFO" "✅ Successfully updated storage service properties"
             
             # Verify the changes
-            if check_blob_service_properties; then
-                log "INFO" "✅ Verified blob properties are correctly configured"
+            if check_storage_policies; then
+                log "INFO" "✅ Verified all storage properties are correctly configured"
                 return 0
             else
                 log "ERROR" "❌ Verification failed after update"
                 return 1
             fi
         else
-            log "ERROR" "❌ Failed to update blob service properties"
+            log "ERROR" "❌ Failed to update storage service properties"
             return 1
         fi
     else
-        log "INFO" "ℹ️ Blob properties are already configured correctly"
+        log "INFO" "ℹ️ All storage properties are already configured correctly"
         return 0
-    fi
-}
-
-# Function to update container policies
-update_container_policies() {
-    if ! check_container_service_properties; then
-        log "INFO" "🔄 Updating container properties..."
-
-        local api_version="2023-01-01"
-        local storage_url="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT/blobServices/default"
-
-        # Update properties using az rest
-        if az rest --method PUT \
-            --uri "https://management.azure.com$storage_url?api-version=$api_version" \
-            --body '{
-                "properties": {
-                    "containerDeleteRetentionPolicy": {
-                        "enabled": true,
-                        "days": 90
-                    },
-                    "changeFeed": {
-                        "enabled": true,
-                        "retentionInDays": 90
-                    },
-                    "isVersioningEnabled": true,
-                    "restorePolicy": {
-                        "enabled": true,
-                        "days": 89
-                    }
-                }
-            }' --output none; then
-            log "INFO" "✅ Successfully updated container properties"
-            
-            # Verify the changes
-            if check_container_service_properties; then
-                log "INFO" "✅ Verified container properties are correctly configured"
-                return 0
-            else
-                log "ERROR" "❌ Verification failed after update"
-                return 1
-            fi
-        else
-            log "ERROR" "❌ Failed to update container properties"
-            return 1
-        fi
-    else
-        log "INFO" "ℹ️ Container properties are already configured correctly"
     fi
 }
 
@@ -881,11 +793,8 @@ main() {
             if $CREATE_CONTAINER; then
                 create_container
             fi
-            if $UPDATE_BLOB_POLICIES; then
-                update_blob_policies
-            fi
-            if $UPDATE_CONTAINER_POLICIES; then
-                update_container_policies
+            if $UPDATE_BLOB_POLICIES || $UPDATE_CONTAINER_POLICIES; then
+                update_storage_policies
             fi
             if $SETUP_AZURE_BACKUP; then
                 register_resource_provider "Microsoft.DataProtection"
