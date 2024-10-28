@@ -278,24 +278,13 @@ perform_checks() {
         fi
     fi
 
-    # Blob Properties check
-    if $RUN_BLOB_PROPERTIES_CHECK; then
-        if check_blob_service_properties; then
-            check_results+=("✅ Blob Properties: properly configured")
+    # Combined Storage Properties check
+    if $RUN_BLOB_PROPERTIES_CHECK || $RUN_CONTAINER_PROPERTIES_CHECK; then
+        if check_storage_policies; then
+            check_results+=("✅ Storage Properties: properly configured")
         else
-check_results+=("❌ Blob Properties: misconfigured")
-            failed_checks+=("Blob properties are not properly configured")
-            all_checks_passed=false
-        fi
-    fi
-
-    # Container Properties check
-    if $RUN_CONTAINER_PROPERTIES_CHECK; then
-        if check_container_service_properties; then
-            check_results+=("✅ Container Properties: properly configured")
-        else
-            check_results+=("❌ Container Properties: misconfigured")
-            failed_checks+=("Container properties are not properly configured")
+            check_results+=("❌ Storage Properties: misconfigured")
+            failed_checks+=("Storage properties are not properly configured")
             all_checks_passed=false
         fi
     fi
