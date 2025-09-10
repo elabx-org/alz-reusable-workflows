@@ -1,0 +1,83 @@
+---
+name: 'Deploy Kustomize Manifest to AKS'
+description: 'Deploy Kustomize Kubernetes manifests to Azure Kubernetes Service'
+
+inputs:
+  client_id: {description: 'Azure client ID for OIDC authentication', required: true}
+  tenant_id: {description: 'Azure tenant ID for OIDC authentication', required: true}
+  subscription_id: {description: 'Azure subscription ID', required: true}
+  cluster-name: {description: 'AKS cluster name', required: true}
+  resource-group: {description: 'Azure resource group containing AKS cluster', required: true}
+  kustomize_path: {description: 'Path to Kubernetes kustomize folder', required: true}
+  dry-run: {description: 'Validate deployment without applying changes', required: false, default: 'false'}
+  force: {description: 'Force apply resources', required: false, default: 'false'}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate Inputs
+      id: validate-inputs
+      shell: bash
+      run: |
+        echo "🔍 Validating inputs..."
+        if [[ ! -d "${{ inputs.kustomize_path }}" ]]; then
+          echo "❌ Error: Kustomize Folder not found at ${{ inputs.kustomize_path }}"
+          exit 1
+        fi
+        echo "✅ Kustomize Folder: ${{ inputs.kustomize_path }}"
+
+    - name: Azure Login
+      id: azure-login
+      uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # V2
+      with:
+        client-id: ${{ inputs.client_id }}
+        tenant-id: ${{ inputs.tenant_id }}
+        subscription-id: ${{ inputs.subscription_id }}
+
+    - name: Setup kubectl
+      id: setup-kubectl
+      uses: azure/setup-kubectl@0c5e050edfed71b2b50731ab044d42489d51c129  # vv4.0.0 (vv is not a typo)
+
+    - name: Get AKS Credentials
+      id: get-aks-credentials
+      uses: azure/aks-set-context@c7eb093e5a5d47caa333f64974d5fd1cd4bf069d  # v4.0.3
+      with:
+        cluster-name: ${{ inputs.cluster-name }}
+        resource-group: ${{ inputs.resource-group }}
+        admin: false
+        use-kubelogin: true
+
+    - name: Validate Kustomize Manifests
+      id: validate-kustomize-manifests
+      shell: bash
+      run: |
+        MANIFEST_DIR="${{ inputs.kustomize_path }}"
+
+        # Validate Kustomize directory
+        echo "🔍 Validating Kustomize Manifest: ${MANIFEST_DIR}"
+
+        if ! kubectl kustomize "${MANIFEST_DIR}" > /dev/null; then
+          echo "❌ Error: Invalid Kustomize configuration in ${MANIFEST_DIR}"
+          exit 1
+        fi
+
+        echo "✅ Manifest Validation successful"
+
+        # Validate using kubectl (dry-run) if needed
+        if [[ "${{ inputs.dry-run }}" == "true" ]]; then
+          echo "🔍 Performing dry-run validation..."
+          kubectl apply --dry-run=server -k "${MANIFEST_DIR}"
+          echo "✅ Validation successful (no changes applied)"
+          exit 0  # Exit early as we don't need to do the actual deployment
+        fi
+
+    - name: Deploy to AKS
+      if: ${{ inputs.dry-run != 'true' }}
+      id: deploy
+      shell: bash
+      run: |
+        echo "🔄 Deploying Kustomize manifests to AKS..."
+        kubectl apply \
+          --force="${{ inputs.force }}" \
+          -k "${{ inputs.kustomize_path }}"
+        echo "✅ Deployment completed successfully"

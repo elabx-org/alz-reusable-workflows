@@ -1,0 +1,172 @@
+name: Setup Environments
+
+on:
+  workflow_call:
+    inputs:
+      config_file:
+        description: 'Path to YAML configuration file'
+        required: false
+        type: string
+      project_name:
+        required: false
+        type: string
+      region:
+        required: false
+        type: string
+      environments:
+        required: false
+        type: string
+      subscription_ids:
+        required: false
+        type: string
+      client_ids:
+        required: false
+        type: string
+      tenant_id:
+        required: false
+        type: string
+      storage_suffix:
+        required: false
+        type: string
+    secrets:
+      GH_PAT:
+        required: true
+
+jobs:
+  verify-inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
+        if: inputs.config_file != 'none'
+        with:
+          repository: ${{ github.repository }}
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Validate Inputs
+        run: |
+          if [ "${{ inputs.config_file }}" != "none" ]; then
+            echo "Using config file: ${{ inputs.config_file }}"
+            # Read values from config file
+            ENVIRONMENTS=$(yq eval '.environments' ${{ inputs.config_file }})
+            SUBSCRIPTION_IDS=$(yq eval '.subscription_ids' ${{ inputs.config_file }})
+            CLIENT_IDS=$(yq eval '.client_ids' ${{ inputs.config_file }})
+            PROJECT_NAME=$(yq eval '.project_name' ${{ inputs.config_file }})
+            REGION=$(yq eval '.region' ${{ inputs.config_file }})
+            STORAGE_SUFFIX=$(yq eval '.storage_suffix' ${{ inputs.config_file }})
+          else
+            echo "Using workflow inputs:"
+            ENVIRONMENTS="${{ inputs.environments }}"
+            SUBSCRIPTION_IDS="${{ inputs.subscription_ids }}"
+            CLIENT_IDS="${{ inputs.client_ids }}"
+            PROJECT_NAME="${{ inputs.project_name }}"
+            REGION="${{ inputs.region }}"
+            STORAGE_SUFFIX="${{ inputs.storage_suffix }}"
+          fi
+
+          # Count number of items in each comma-separated list
+          ENV_COUNT=$(echo "$ENVIRONMENTS" | tr -cd ',' | wc -c)
+          ENV_COUNT=$((ENV_COUNT + 1))
+          SUB_COUNT=$(echo "$SUBSCRIPTION_IDS" | tr -cd ',' | wc -c)
+          SUB_COUNT=$((SUB_COUNT + 1))
+          CLIENT_COUNT=$(echo "$CLIENT_IDS" | tr -cd ',' | wc -c)
+          CLIENT_COUNT=$((CLIENT_COUNT + 1))
+
+          echo "Number of environments: $ENV_COUNT"
+          echo "Number of subscription IDs: $SUB_COUNT"
+          echo "Number of client IDs: $CLIENT_COUNT"
+
+          # Validate counts match
+          if [ $SUB_COUNT -ne $ENV_COUNT ]; then
+            echo "Error: Number of subscription IDs ($SUB_COUNT) does not match number of environments ($ENV_COUNT)"
+            exit 1
+          fi
+
+          if [ $CLIENT_COUNT -ne $ENV_COUNT ]; then
+            echo "Error: Number of client IDs ($CLIENT_COUNT) does not match number of environments ($ENV_COUNT)"
+            exit 1
+          fi
+
+          # Display mapping for verification
+          IFS=',' read -ra ENVS <<< "$ENVIRONMENTS"
+          IFS=',' read -ra SUBS <<< "$SUBSCRIPTION_IDS"
+          IFS=',' read -ra CLIENTS <<< "$CLIENT_IDS"
+
+          echo "Environment mappings:"
+          for i in "${!ENVS[@]}"; do
+            echo "Environment: ${ENVS[$i]}"
+            echo "  Subscription ID: ${SUBS[$i]}"
+            echo "  Client ID: ${CLIENTS[$i]}"
+          done
+
+          # Validate storage account name length
+          IFS=',' read -ra REGIONS <<< "$REGION"
+          for region in "${REGIONS[@]}"; do
+            # Construct storage account name
+            STORAGE_NAME="orgsttfstate${PROJECT_NAME}${region}${STORAGE_SUFFIX}"
+
+            # Check length
+            if [ ${#STORAGE_NAME} -gt 24 ]; then
+              echo "Error: Storage account name '${STORAGE_NAME}' exceeds 24 characters"
+              echo "Current length: ${#STORAGE_NAME}"
+              echo "Please adjust project_name to reduce total length"
+              exit 1
+            fi
+          done
+
+  prepare-json:
+    needs: verify-inputs
+    runs-on: ubuntu-latest
+    outputs:
+      config_json: ${{ steps.create-json.outputs.json }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
+        if: inputs.config_file != 'none'
+        with:
+          repository: ${{ github.repository }}
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Create JSON
+        id: create-json
+        run: |
+          if [ "${{ inputs.config_file }}" != "none" ]; then
+            # Read config file and convert to json in a way that escapes special characters
+            config_json=$(yq eval -o=json ${{ inputs.config_file }} | jq -c '.')
+            # Use jq to ensure proper JSON format and escaping
+            echo "json=$config_json" >> "$GITHUB_OUTPUT"
+          else
+            # Use workflow inputs - construct and escape JSON
+            json_content=$(echo "{\"project_name\":\"${{ inputs.project_name }}\",\"region\":\"${{ inputs.region }}\",\"environments\":\"${{ inputs.environments }}\",\"subscription_ids\":\"${{ inputs.subscription_ids }}\",\"client_ids\":\"${{ inputs.client_ids }}\",\"tenant_id\":\"${{ inputs.tenant_id }}\",\"storage_suffix\":\"${{ inputs.storage_suffix }}\"}" | jq -c '.')
+            echo "json=$json_content" >> "$GITHUB_OUTPUT"
+          fi
+
+  create-matrix:
+    needs: prepare-json
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    steps:
+      - name: Build Matrix
+        id: build-matrix
+        run: |
+          matrix_json="{\"include\":[{\"region\":\"${{ fromJson(needs.prepare-json.outputs.config_json).region }}\"}]}"
+          echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
+
+  setup-env:
+    needs: [create-matrix, prepare-json]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.create-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
+        with:
+          repository: org-redacted/alz-reusable-workflows
+          path: ./alz-reusable-workflows
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+          ref: main
+
+      - uses: ./alz-reusable-workflows/.github/actions/gh-env-setup
+        with:
+          github_token: ${{ secrets.GH_PAT }}
+          config: ${{ needs.prepare-json.outputs.config_json }}
+          region: ${{ matrix.region }}

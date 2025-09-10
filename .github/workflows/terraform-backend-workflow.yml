@@ -1,0 +1,97 @@
+name: 'terraform backend'
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: 'Which checks to run'
+        type: string
+        default: 'checks-only'
+      environment:
+        description: 'Deployment Environment from GH'
+        type: string
+      project:
+        description: 'Project name'
+        required: false
+        type: string
+      add_suffix:
+        description: 'Add suffix to backend container'
+        required: true
+        type: string
+      project_type:
+        description: 'Type of project'
+        required: false
+        type: string
+      create_policy_exemptions:
+        description: 'Create policy exemptions?'
+        type: string
+        default: 'true'
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  setup-backend:
+    runs-on: >-
+      ${{
+        (contains(vars.RUNNER_CONFIG, '{') && contains(vars.RUNNER_CONFIG, '}'))
+        && (fromJSON(vars.RUNNER_CONFIG).runner || fromJSON(vars.RUNNER_CONFIG).labels)
+        || vars.RUNNER_CONFIG
+      }}
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
+        with:
+          repository: org-redacted/alz-reusable-workflows
+          path: ./alz-reusable-workflows
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+          ref: main
+
+      - name: Set TF Backend Container
+        id: set-container
+        run: |
+          if [ "${{ inputs.add_suffix }}" = "true" ]; then
+            if [ "${{ inputs.project }}" = "default" ]; then
+              echo "Project name is required when add_suffix is true and project is not default"
+              exit 1
+            fi
+            echo "TF_BACKEND_SA_CONTAINER=${{ vars.TF_BACKEND_SA_CONTAINER }}-${{ inputs.project }}-${{ inputs.project_type }}" >> "$GITHUB_ENV"
+          else
+            echo "TF_BACKEND_SA_CONTAINER=${{ vars.TF_BACKEND_SA_CONTAINER }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Debug Inputs
+        run: |
+          echo "add_suffix: ${{ inputs.add_suffix }}"
+          echo "project: ${{ inputs.project }}"
+          echo "project_type: ${{ inputs.project_type }}"
+          echo "tf_backend_mode: ${{ inputs.mode }}"
+          echo "tf_backend_env: ${{ vars.TF_BACKEND_ENV }}"
+          echo "tf_backend_sa_rg: ${{ vars.TF_BACKEND_SA_RG }}"
+          echo "tf_backend_sa: ${{ vars.TF_BACKEND_SA }}"
+          echo "tf_backend_sa_region: ${{ vars.TF_BACKEND_SA_REGION }}"
+          echo "tf_backend_sa_region_short: ${{ vars.TF_BACKEND_SA_REGION_SHORT }}"
+          echo "tf_backend_sa_sku: ${{ vars.TF_BACKEND_SA_SKU }}"
+          echo "tf_backend_sa_container: ${{ env.TF_BACKEND_SA_CONTAINER }}"
+
+      - name: TF Backend Config
+        uses: ./alz-reusable-workflows/.github/actions/terraform-backend-create
+        with:
+          environment: ${{ inputs.environment }}
+          client_id: ${{ vars.ARM_CLIENT_ID }}
+          tenant_id: ${{ vars.ARM_TENANT_ID }}
+          subscription_id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+          tf_backend_mode: ${{ inputs.mode }}
+          tf_backend_env: ${{ vars.TF_BACKEND_ENV }}
+          tf_backend_sa_rg: ${{ vars.TF_BACKEND_SA_RG }}
+          tf_backend_sa: ${{ vars.TF_BACKEND_SA }}
+          tf_backend_sa_region: ${{ vars.TF_BACKEND_SA_REGION }}
+          tf_backend_sa_region_short: ${{ vars.TF_BACKEND_SA_REGION_SHORT }}
+          tf_backend_sa_sku: ${{ vars.TF_BACKEND_SA_SKU }}
+          tf_backend_sa_container: ${{ env.TF_BACKEND_SA_CONTAINER }}
+          create_policy_exemptions: ${{ inputs.create_policy_exemptions}}

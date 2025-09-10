@@ -2,33 +2,34 @@ name: 'Terraform Backend Action'
 description: 'Creates and configures Azure Storage Container and Azure Backup for Terraform backend'
 
 inputs:
-  environment: { description: 'Environment name', required: true }
-  subnet_ids: { description: 'Comma-separated list of subnet IDs', required: false, default: '' }
-  run_resource_provider_check: { description: 'Run resource provider registration check', required: false, default: 'true' }
-  run_resource_group_check: { description: 'Run resource group check', required: false, default: 'true' }
-  run_storage_account_check: { description: 'Run storage account check', required: false, default: 'true' }
-  run_network_rules_check: { description: 'Run network rules check', required: false, default: 'true' }
-  run_blob_properties_check: { description: 'Run blob properties check', required: false, default: 'true' }
-  run_container_properties_check: { description: 'Run container properties check', required: false, default: 'true' }
-  run_backup_checks: { description: 'Run backup checks', required: false, default: 'true' }
-  create_resource_group: { description: 'Create resource group', required: false, default: 'true' }
-  create_storage_account: { description: 'Create storage account', required: false, default: 'true' }
-  update_network_rules: { description: 'Update network rules', required: false, default: 'false' }
-  create_container: { description: 'Create container', required: false, default: 'true' }
-  update_blob_policies: { description: 'Update blob policies', required: false, default: 'true' }
-  update_container_policies: { description: 'Update container policies', required: false, default: 'true' }
-  setup_azure_backup: { description: 'Setup Azure backup', required: false, default: 'true' }
-  client_id: { description: 'Azure Client ID', required: true }
-  tenant_id: { description: 'Azure Tenant ID', required: true }
-  subscription_id: { description: 'Azure Subscription ID', required: true }
-  tf_backend_sa_rg: { description: 'Terraform backend resource group', required: true }
-  tf_backend_sa: { description: 'Terraform backend storage account', required: true }
-  tf_backend_sa_container: { description: 'Terraform backend container', required: true }
-  tf_backend_sa_region: { description: 'Terraform backend region', required: true }
-  tf_backend_sa_region_short: { description: 'Terraform backend region short name', required: true }
-  tf_backend_sa_sku: { description: 'Terraform backend SKU', required: true }
-  tf_backend_env: { description: 'Terraform backend environment', required: true }
-  mode: {description: 'Run mode (checks-only, backup-only, infra-only, or create)', required: false,default: 'create'}  
+  environment: {description: 'Environment name', required: true}
+  subnet_ids: {description: 'Comma-separated list of subnet IDs', required: false, default: ''}
+  run_resource_provider_check: {description: 'Run resource provider registration check', required: false, default: 'true'}
+  run_resource_group_check: {description: 'Run resource group check', required: false, default: 'true'}
+  run_storage_account_check: {description: 'Run storage account check', required: false, default: 'true'}
+  run_network_rules_check: {description: 'Run network rules check', required: false, default: 'true'}
+  run_blob_properties_check: {description: 'Run blob properties check', required: false, default: 'true'}
+  run_container_properties_check: {description: 'Run container properties check', required: false, default: 'true'}
+  run_backup_checks: {description: 'Run backup checks', required: false, default: 'true'}
+  create_policy_exemptions: {description: 'Create policy exemptions', required: false, default: 'true'}
+  create_resource_group: {description: 'Create resource group', required: false, default: 'true'}
+  create_storage_account: {description: 'Create storage account', required: false, default: 'true'}
+  update_network_rules: {description: 'Update network rules', required: false, default: 'true'}
+  create_container: {description: 'Create container', required: false, default: 'true'}
+  update_blob_policies: {description: 'Update blob policies', required: false, default: 'true'}
+  update_container_policies: {description: 'Update container policies', required: false, default: 'true'}
+  setup_azure_backup: {description: 'Setup Azure backup', required: false, default: 'true'}
+  client_id: {description: 'Azure Client ID', required: true}
+  tenant_id: {description: 'Azure Tenant ID', required: true}
+  subscription_id: {description: 'Azure Subscription ID', required: true}
+  tf_backend_sa_rg: {description: 'Terraform backend resource group', required: true}
+  tf_backend_sa: {description: 'Terraform backend storage account', required: true}
+  tf_backend_sa_container: {description: 'Terraform backend container', required: true}
+  tf_backend_sa_region: {description: 'Terraform backend region', required: true}
+  tf_backend_sa_region_short: {description: 'Terraform backend region short name', required: true}
+  tf_backend_sa_sku: {description: 'Terraform backend SKU', required: true}
+  tf_backend_env: {description: 'Terraform backend environment', required: true}
+  tf_backend_mode: {description: 'Run mode (checks-only, backup-only, infra-only, configure-backup-only or create)', required: false, default: 'create'}
 
 runs:
   using: "composite"
@@ -37,24 +38,26 @@ runs:
       shell: bash
       run: |
         echo
-        echo "::group::⚠️ Execution Mode: ${{ 
-          inputs.mode == 'checks-only' && 'All Checks' ||
-          inputs.mode == 'backup-only' && 'Backup Checks Only' ||
-          inputs.mode == 'infra-only' && 'Infrastructure Checks Only' ||
+        echo "::group::⚠️ Execution Mode: ${{
+          inputs.tf_backend_mode == 'checks-only' && 'All Checks' ||
+          inputs.tf_backend_mode == 'backup-only' && 'Backup Checks Only' ||
+          inputs.tf_backend_mode == 'infra-only' && 'Infrastructure Checks Only' ||
+          inputs.tf_backend_mode == 'configure-backup-only' && 'Configure Backup Only' ||
           'Create/Update'
         }}"
-        echo "::notice::━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "::notice::🔍 EXECUTION MODE: ${{ 
-          inputs.mode == 'checks-only' && 'CHECKS ONLY - Running all checks (No changes will be made)' ||
-          inputs.mode == 'backup-only' && 'BACKUP CHECKS ONLY - Running backup checks (No changes will be made)' ||
-          inputs.mode == 'infra-only' && 'INFRASTRUCTURE CHECKS ONLY - Running infrastructure checks (No changes will be made)' ||
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "::notice::🔍 EXECUTION MODE: ${{
+          inputs.tf_backend_mode == 'checks-only' && 'CHECKS ONLY - Running all checks (No changes will be made)' ||
+          inputs.tf_backend_mode == 'backup-only' && 'BACKUP CHECKS ONLY - Running backup checks (No changes will be made)' ||
+          inputs.tf_backend_mode == 'infra-only' && 'INFRASTRUCTURE CHECKS ONLY - Running infrastructure checks (No changes will be made)' ||
+          inputs.tf_backend_mode == 'configure-backup-only' && 'CONFIGURE BACKUP ONLY - Configuring backup' ||
           'CREATE/UPDATE MODE - Changes will be applied'
         }}"
-        echo "::notice::━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "::endgroup::"
 
     - name: Azure Login
-      uses: azure/login@v2
+      uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # V2
       with:
         client-id: ${{ inputs.client_id }}
         tenant-id: ${{ inputs.tenant_id }}
@@ -79,6 +82,7 @@ runs:
         RUN_BLOB_PROPERTIES_CHECK: ${{ inputs.run_blob_properties_check }}
         RUN_CONTAINER_PROPERTIES_CHECK: ${{ inputs.run_container_properties_check }}
         RUN_BACKUP_CHECKS: ${{ inputs.run_backup_checks }}
+        CREATE_POLICY_EXEMPTIONS: ${{ inputs.create_policy_exemptions }}
         CREATE_RESOURCE_GROUP: ${{ inputs.create_resource_group }}
         CREATE_STORAGE_ACCOUNT: ${{ inputs.create_storage_account }}
         UPDATE_NETWORK_RULES: ${{ inputs.update_network_rules }}
@@ -89,12 +93,4 @@ runs:
         ARM_USE_OIDC: true
       run: |
           echo
-          bash ${{ github.action_path }}/scripts/create-tf-backend.sh ${{ inputs.mode }}
-
-    - name: Azure Logout
-      if: always()
-      shell: bash
-      run: |
-        az logout
-        az cache purge
-        az account clear
+          bash ${{ github.action_path }}/scripts/create-tf-backend.sh ${{ inputs.tf_backend_mode }}

@@ -12,11 +12,25 @@ on:
       terraform_working_dir: {type: string, default: '.', description: 'Terraform working directory'}
       run_check_tf_changes: {type: boolean, default: true, description: 'Run check-tf-changes job'}
       run_validate_module: {type: boolean, default: true, description: 'Run validate-module job'}
+      run_lint_module: {type: boolean, default: false, description: 'Run lint-module job'}
+      run_test_module: {type: boolean, default: false, description: 'Run test-module job'}
+      test_environment: {type: string, default: "", description: 'The name of the GitHub Environment used to run module tests.'}
+      run_security_scan_module: {type: boolean, default: false, description: 'Run security-scan-module job'}
       run_tf_docs: {type: boolean, default: false, description: 'Run tf-docs job and generate docs'}
       run_release_and_tag: {type: boolean, default: true, description: 'Run release-and-tag job'}
       tf_docs_output_file: {type: string, default: 'README.md', description: 'terraform-docs output file'}
       tf_docs_config_file: {type: string, default: '.terraform-docs.yml', description: 'terraform-docs config file'}
       tf_docs_clear_workspace: {type: boolean, default: false, description: 'Clean workspace before terraform-docs'}
+    secrets:
+      arm_client_id:
+        description: 'Azure Client ID for OIDC authentication. Only required if Terraform Testing in use.'
+        required: false
+      arm_tenant_id:
+        description: 'Azure Tenant ID for OIDC authentication. Only required if Terraform Testing in use.'
+        required: false
+      arm_subscription_id:
+        description: 'Azure Subscription ID for OIDC authentication. Only required if Terraform Testing in use.'
+        required: false
 
 permissions:
   id-token: write
@@ -25,6 +39,11 @@ permissions:
   actions: read
 
 jobs:
+
+###############################################################################
+# OUTPUT ACTION CONFIGURATION
+###############################################################################
+
   output-config:
     name: 'Output Configuration'
     runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
@@ -39,11 +58,16 @@ jobs:
             echo "|---------|---------------|----------------|"
             echo "| 🖥️ Runner: \`${{ inputs.runs_on }}\` | 📋 Check TF: \`${{ inputs.run_check_tf_changes }}\` | 📄 Output: \`${{ inputs.tf_docs_output_file }}\` |"
             echo "| 🔖 Branch: \`$HEAD_REF\` | 📋 Validate: \`${{ inputs.run_validate_module }}\` | ⚙️ Config: \`${{ inputs.tf_docs_config_file }}\` |"
-            echo "| 🔼 Version Increment: \`${{ inputs.increment }}\` | 📋 TF Docs: \`${{ inputs.run_tf_docs }}\` | 🧹 Clear Workspace: \`${{ inputs.tf_docs_clear_workspace }}\` |"
-            echo "| 🚀 Force: \`${{ inputs.force_release }}\` | 📋 Release: \`${{ inputs.run_release_and_tag }}\` | |"
-            echo "| 🛠️ GH CLI: \`${{ inputs.install_gh_cli }}\` | | |"
-            echo "| 📁 TF Dir: \`${{ inputs.terraform_working_dir }}\` | | |"
+            echo "| 🔼 Version Increment: \`${{ inputs.increment }}\` | 📋 Lint: \`${{ inputs.run_lint_module }}\` | 🧹 Clear Workspace: \`${{ inputs.tf_docs_clear_workspace }}\` |"
+            echo "| 🚀 Force: \`${{ inputs.force_release }}\` | 📋 Test: \`${{ inputs.run_test_module }}\` | |"
+            echo "| 🛠️ GH CLI: \`${{ inputs.install_gh_cli }}\` | 📋 Security Scan: \`${{ inputs.run_security_scan_module }}\` | |"
+            echo "| 📁 TF Dir: \`${{ inputs.terraform_working_dir }}\` | 📋 TF Docs: \`${{ inputs.run_tf_docs }}\` | |"
+            echo "| | 📋 Release: \`${{ inputs.run_release_and_tag }}\` | |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+###############################################################################
+# CHECK FOR TERRAFORM CHANGES
+###############################################################################
 
   check-tf-changes:
     name: 'Check for Terraform Changes'
@@ -79,7 +103,7 @@ jobs:
 
       - name: Checkout code
         if: steps.should_run.outputs.check_run == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
         with:
           fetch-depth: 0
           ref: ${{ github.head_ref || github.ref_name }}
@@ -189,6 +213,10 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+###############################################################################
+# TERRAFORM VALIDATE
+###############################################################################
+
   validate-module:
     name: 'Validate Module'
     needs: check-tf-changes
@@ -204,7 +232,7 @@ jobs:
           validate_module="false"
           skip_reason=""
 
-          # Prioritize run_validate_module. If true, always validate.
+          # Prioritise run_validate_module. If true, always validate.
           if [[ "${{ inputs.run_validate_module }}" == "true" ]]; then
             validate_module="true"
           elif [[ "${{ needs.check-tf-changes.outputs.tf_changed }}" != "true" && "${{ inputs.force_release }}" != "true" ]]; then
@@ -219,11 +247,11 @@ jobs:
 
       - name: Checkout code
         if: steps.validation_check.outputs.validate_module == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
 
       - name: Setup Terraform
         if: steps.validation_check.outputs.validate_module == 'true'
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd  # V3
         with:
           terraform_wrapper: false
 
@@ -273,10 +301,395 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+###############################################################################
+# TERRAFORM LINTING
+###############################################################################
+
+  lint-module:
+    name: 'Lint Module'
+    needs: check-tf-changes
+    if: always()
+    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
+    outputs:
+      status: ${{ steps.set_outputs.outputs.status }}
+      details: ${{ steps.set_outputs.outputs.details }}
+    steps:
+      - name: Check lint requirements
+        id: lint_check
+        run: |
+          lint_module="false"
+          skip_reason=""
+
+          # We only want to run on if run_lint_module is true.
+          # We literally don't care for any other reason, and will always run the linting if run_lint_module is enabled.
+          if [[ "${{ inputs.run_lint_module }}" == "true" ]]; then
+            lint_module="true"
+          else
+            skip_reason="run_lint_module is not set to true"
+            lint_module="false"
+          fi
+
+          echo "lint_module=$lint_module" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        if: steps.lint_check.outputs.lint_module == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
+
+      - name: Setup TFLint
+        if: steps.lint_check.outputs.lint_module == 'true'
+        id: setup_tflint
+        uses: terraform-linters/setup-tflint@90f302c255ef959cbfb4bd10581afecdb7ece3e6  # V4
+
+      - name: Show TFLint Version
+        if: steps.lint_check.outputs.lint_module == 'true'
+        id: tflint_version
+        run: tflint --version
+
+      - name: Init TFLint
+        if: steps.lint_check.outputs.lint_module == 'true'
+        id: tflint_init
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Run TFLint
+        if: steps.lint_check.outputs.lint_module == 'true'
+        id: tflint_run
+        run: tflint --format compact --recursive
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          if [[ "${{ steps.lint_check.outputs.lint_module }}" == "true" ]]; then
+            echo "status=✅ Executed" >> "$GITHUB_OUTPUT"
+            echo "details=All linting passed" >> "$GITHUB_OUTPUT"
+          else
+            # Check if the job was intentionally disabled via input.
+            if [[ "${{ inputs.run_lint_module }}" != "true" ]]; then
+              skip_reason="run_lint_module is not true"
+            else
+              # Use the skip_reason set in the lint_check step.
+              skip_reason="${{ steps.lint_check.outputs.skip_reason }}"
+            fi
+            echo "status=⏭️ Skipped" >> "$GITHUB_OUTPUT"
+            echo "details=$skip_reason" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Job Summary
+        run: |
+          {
+            echo "### Lint Module Summary"
+            echo "| Aspect | Details |"
+            echo "|--------|---------|"
+            echo "| Status | ${{ steps.set_outputs.outputs.status }} |"
+            echo "| Details | ${{ steps.set_outputs.outputs.details }} |"
+            if [[ "${{ steps.lint_check.outputs.lint_module }}" == "true" ]]; then
+              echo "| Terraform Init | Completed |"
+              echo "| Terraform Lint | Passed |"
+              echo "| Working Directory | ${{ inputs.terraform_working_dir }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+###############################################################################
+# TERRAFORM TESTS
+###############################################################################
+
+  test-module:
+    name: 'Test Module'
+    needs: check-tf-changes
+    if: always()
+    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
+    environment: ${{ inputs.test_environment }}
+    outputs:
+      status: ${{ steps.set_outputs.outputs.status }}
+      details: ${{ steps.set_outputs.outputs.details }}
+    steps:
+      - name: Check test requirements
+        id: test_check
+        run: |
+          test_module="false"
+          skip_reason=""
+
+          # We only want to run on if run_test_module is true.
+          # We literally don't care for any other reason, and will always run the tests if run_test_module is enabled.
+          if [[ "${{ inputs.run_test_module }}" == "true" ]]; then
+            test_module="true"
+          else
+            skip_reason="run_test_module is not set to true"
+            test_module="false"
+          fi
+
+          echo "test_module=$test_module" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        if: steps.test_check.outputs.test_module == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
+
+      - name: Setup Terraform
+        if: steps.test_check.outputs.test_module == 'true'
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd  # V3
+        with:
+          terraform_wrapper: false
+
+      - name: Check for Unit Tests Directory
+        if: steps.test_check.outputs.test_module == 'true'
+        run: |
+          if [ ! -d tests ]
+            then echo "Tests directory does not exist, quitting!"
+            exit 1
+          fi
+
+      - name: Terraform Init (Unit Tests)
+        id: terraform_init_unit
+        if: steps.test_check.outputs.test_module == 'true'
+        run: terraform init -backend=false
+
+      - name: Terraform Test (Unit Tests)
+        id: terraform_test_unit
+        if: steps.test_check.outputs.test_module == 'true'
+        run: terraform test
+
+      - name: Check for Integration Tests Directory
+        if: steps.test_check.outputs.test_module == 'true'
+        run: |
+          if [ ! -d tests/integration/ ]
+            then echo "Tests directory does not exist, quitting!"
+            exit 1
+          fi
+
+      - name: Azure Login
+        id: azure_login
+        if: steps.test_check.outputs.test_module == 'true'
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # V2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init (Integration Tests)
+        id: terraform_init_integration
+        if: steps.test_check.outputs.test_module == 'true'
+        run: terraform init -backend=false -test-directory=./tests/integration/
+
+      - name: Terraform Test (Integration Tests)
+        id: terraform_test_integration
+        if: steps.test_check.outputs.test_module == 'true'
+        run: terraform test -test-directory=./tests/integration/
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          if [[ "${{ steps.test_check.outputs.test_module }}" == "true" ]]; then
+            echo "status=✅ Executed" >> "$GITHUB_OUTPUT"
+            echo "details=All tests passed" >> "$GITHUB_OUTPUT"
+          else
+            # Check if the job was intentionally disabled via input.
+            if [[ "${{ inputs.run_test_module }}" != "true" ]]; then
+              skip_reason="run_test_module is not true"
+            else
+              # Use the skip_reason set in the test_check step.
+              skip_reason="${{ steps.test_check.outputs.skip_reason }}"
+            fi
+            echo "status=⏭️ Skipped" >> "$GITHUB_OUTPUT"
+            echo "details=$skip_reason" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Job Summary
+        run: |
+          {
+            echo "### Test Module Summary"
+            echo "| Aspect | Details |"
+            echo "|--------|---------|"
+            echo "| Status | ${{ steps.set_outputs.outputs.status }} |"
+            echo "| Details | ${{ steps.set_outputs.outputs.details }} |"
+            if [[ "${{ steps.test_check.outputs.test_module }}" == "true" ]]; then
+              echo "| Terraform Init - Unit Tests | Completed |"
+              echo "| Terraform Unit Tests | Passed |"
+              echo "| Terraform Init - Integration Tests | Completed |"
+              echo "| Terraform Integration Tests | Passed |"
+              echo "| Working Directory | ${{ inputs.terraform_working_dir }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+###############################################################################
+# CHECKOV TERRAFORM SECURITY SCAN
+###############################################################################
+
+  security-scan-module:
+    name: 'Security Scan Module'
+    needs: check-tf-changes
+    if: always()
+    runs-on: ubuntu-22.04
+    outputs:
+      status: ${{ steps.set_outputs.outputs.status }}
+      details: ${{ steps.set_outputs.outputs.details }}
+    steps:
+      - name: Check Security Scan Requirements
+        id: security_scan_check
+        run: |
+          security_scan_module="false"
+          skip_reason=""
+
+          # We only want to run on if run_security_scan_module is true.
+          # We literally don't care for any other reason, and will always run the tests if run_security_scan_module is enabled.
+          if [[ "${{ inputs.run_security_scan_module }}" == "true" ]]; then
+            security_scan_module="true"
+          else
+            skip_reason="run_security_scan_module is not set to true"
+            security_scan_module="false"
+          fi
+
+          echo "security_scan_module=$security_scan_module" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        if: steps.security_scan_check.outputs.security_scan_module == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
+
+      - name: Checkov Scan Terraform
+        if: steps.security_scan_check.outputs.security_scan_module == 'true'
+        uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf  # V12
+        with:
+          output_format: cli
+          framework: terraform
+          download_external_modules: true
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          if [[ "${{ steps.security_scan_check.outputs.security_scan_module }}" == "true" ]]; then
+            echo "status=✅ Executed" >> "$GITHUB_OUTPUT"
+            echo "details=All Security Scans Passed" >> "$GITHUB_OUTPUT"
+          else
+            # Check if the job was intentionally disabled via input.
+            if [[ "${{ inputs.run_security_scan_module }}" != "true" ]]; then
+              skip_reason="security_scan_module is not true"
+            else
+              # Use the skip_reason set in the security_scan_check step.
+              skip_reason="${{ steps.security_scan_check.outputs.skip_reason }}"
+            fi
+            echo "status=⏭️ Skipped" >> "$GITHUB_OUTPUT"
+            echo "details=$skip_reason" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Job Summary
+        run: |
+          {
+            echo "### Test Module Summary"
+            echo "| Aspect | Details |"
+            echo "|--------|---------|"
+            echo "| Status | ${{ steps.set_outputs.outputs.status }} |"
+            echo "| Details | ${{ steps.set_outputs.outputs.details }} |"
+            if [[ "${{ steps.security_scan_check.outputs.security_scan_module }}" == "true" ]]; then
+              echo "| Checkov Security Scan | Completed |"
+              echo "| Working Directory | ${{ inputs.terraform_working_dir }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+###############################################################################
+# UPDATE TERRAFORM DOCS
+###############################################################################
+
+  tf-docs:
+    name: 'Generate Terraform Docs'
+    needs: [output-config, check-tf-changes, validate-module, test-module, lint-module, security-scan-module]
+    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
+    outputs:
+      status: ${{ steps.set_outputs.outputs.status }}
+      details: ${{ steps.set_outputs.outputs.details }}
+    steps:
+      - name: Check conditions
+        id: check_conditions
+        run: |
+          should_run="true"
+          skip_reason=""
+
+          if [[ "${{ inputs.run_tf_docs }}" != "true" ]]; then
+            should_run="false"
+            skip_reason="run_tf_docs is not true"
+          fi
+
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+      - name: Clear workspace
+        if: steps.check_conditions.outputs.should_run == 'true' && inputs.tf_docs_clear_workspace == 'true'
+        run: |
+          sudo rm -rf .git
+          git init
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
+        if: steps.check_conditions.outputs.should_run == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.head_ref }}
+
+      - name: Render terraform docs and push changes back to PR
+        if: steps.check_conditions.outputs.should_run == 'true'
+        uses: terraform-docs/gh-actions@6de6da0cefcc6b4b7a5cbea4d79d97060733093c  # V1
+        with:
+          working-dir: ${{ inputs.terraform_working_dir }}
+          output-file: ${{ inputs.tf_docs_output_file }}
+          output-method: inject
+          git-push: "false"
+          config-file: ${{ inputs.tf_docs_config_file }}
+
+      - name: Set permissions for .git directory
+        run: sudo chmod -R 777 .git
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Commit changes
+        if: steps.check_conditions.outputs.should_run == 'true'
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add ${{ inputs.terraform_working_dir }}/${{ inputs.tf_docs_output_file }}
+          # Check if there are any changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "terraform-docs: automated action"
+            git push
+          fi
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          {
+            if [[ "${{ steps.check_conditions.outputs.should_run }}" == "true" ]]; then
+              echo "status=✅ Executed"
+              echo "details=Docs generated and committed"
+            else
+              echo "status=⏭️ Skipped"
+              echo "details=${{ steps.check_conditions.outputs.skip_reason }}"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Job Summary
+        run: |
+          {
+            echo "### Generate Terraform Docs Summary"
+            echo "| Aspect | Details |"
+            echo "|--------|---------|"
+            echo "| Status | ${{ steps.set_outputs.outputs.status }} |"
+            echo "| Details | ${{ steps.set_outputs.outputs.details }} |"
+            if [[ "${{ steps.check_conditions.outputs.should_run }}" == "true" ]]; then
+              echo "| Output File | ${{ inputs.tf_docs_output_file }} |"
+              echo "| Config File | ${{ inputs.tf_docs_config_file }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+###############################################################################
+# CREATE GITHUB RELEASE AND TAG
+###############################################################################
+
   release-and-tag:
     name: 'Create Release and Tag'
-    needs: [check-tf-changes, validate-module]
-    if: always()
+    needs: [check-tf-changes, validate-module, test-module, lint-module, security-scan-module, tf-docs]
     runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
     outputs:
       status: ${{ steps.set_outputs.outputs.status }}
@@ -286,7 +699,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
         with:
           fetch-depth: 0
 
@@ -530,104 +943,14 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-  tf-docs:
-    name: 'Generate Terraform Docs'
-    needs: [output-config, check-tf-changes, validate-module, release-and-tag]
-    if: always()
-    runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
-    outputs:
-      status: ${{ steps.set_outputs.outputs.status }}
-      details: ${{ steps.set_outputs.outputs.details }}
-    steps:
-      - name: Check conditions
-        id: check_conditions
-        run: |
-          should_run="true"
-          skip_reason=""
 
-          if [[ "${{ inputs.run_tf_docs }}" != "true" ]]; then
-            should_run="false"
-            skip_reason="run_tf_docs is not true"
-          fi
-
-          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
-          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
-
-      - name: Clear workspace
-        if: steps.check_conditions.outputs.should_run == 'true' && inputs.tf_docs_clear_workspace == 'true'
-        run: |
-          sudo rm -rf .git
-          git init
-
-      - uses: actions/checkout@v4
-        if: steps.check_conditions.outputs.should_run == 'true'
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-          ref: ${{ github.head_ref }}
-
-      - name: Render terraform docs and push changes back to PR
-        if: steps.check_conditions.outputs.should_run == 'true'
-        uses: terraform-docs/gh-actions@v1.2.0
-        with:
-          working-dir: ${{ inputs.terraform_working_dir }}
-          output-file: ${{ inputs.tf_docs_output_file }}
-          output-method: inject
-          git-push: "false"
-          config-file: ${{ inputs.tf_docs_config_file }}
-
-      - name: Set permissions for .git directory
-        run: sudo chmod -R 777 .git
-
-      - name: Configure Git
-        run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-
-      - name: Commit changes
-        if: steps.check_conditions.outputs.should_run == 'true'
-        run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add ${{ inputs.terraform_working_dir }}/${{ inputs.tf_docs_output_file }}
-          # Check if there are any changes to commit
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "terraform-docs: automated action"
-            git push
-          fi
-
-      - name: Set outputs
-        id: set_outputs
-        run: |
-          {
-            if [[ "${{ steps.check_conditions.outputs.should_run }}" == "true" ]]; then
-              echo "status=✅ Executed"
-              echo "details=Docs generated and committed"
-            else
-              echo "status=⏭️ Skipped"
-              echo "details=${{ steps.check_conditions.outputs.skip_reason }}"
-            fi
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Job Summary
-        run: |
-          {
-            echo "### Generate Terraform Docs Summary"
-            echo "| Aspect | Details |"
-            echo "|--------|---------|"
-            echo "| Status | ${{ steps.set_outputs.outputs.status }} |"
-            echo "| Details | ${{ steps.set_outputs.outputs.details }} |"
-            if [[ "${{ steps.check_conditions.outputs.should_run }}" == "true" ]]; then
-              echo "| Output File | ${{ inputs.tf_docs_output_file }} |"
-              echo "| Config File | ${{ inputs.tf_docs_config_file }} |"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+###############################################################################
+# CREATE WORKFLOW SUMMARY
+###############################################################################
 
   workflow-summary:
     name: 'Workflow Execution Overview'
-    needs: [output-config, check-tf-changes, validate-module, tf-docs, release-and-tag]
+    needs: [output-config, check-tf-changes, validate-module, test-module, lint-module, security-scan-module, tf-docs, release-and-tag]
     runs-on: ${{ fromJSON(inputs.runs_on).runner || fromJSON(inputs.runs_on) }}
     steps:
       - name: Create workflow summary
@@ -639,6 +962,9 @@ jobs:
             echo "| Output Config | ✅ Executed | Configuration displayed at start of workflow |"
             echo "| Check TF Changes | ${{ needs.check-tf-changes.outputs.status }} | ${{ needs.check-tf-changes.outputs.details }} |"
             echo "| Validate Module | ${{ needs.validate-module.outputs.status }} | ${{ needs.validate-module.outputs.details }} |"
+            echo "| Test Module | ${{ needs.test-module.outputs.status }} | ${{ needs.test-module.outputs.details }} |"
+            echo "| Lint Module | ${{ needs.lint-module.outputs.status }} | ${{ needs.lint-module.outputs.details }} |"
+            echo "| Security Scan Module | ${{ needs.security-scan-module.outputs.status }} | ${{ needs.security-scan-module.outputs.details }} |"
             echo "| Generate TF Docs | ${{ needs.tf-docs.outputs.status }} | ${{ needs.tf-docs.outputs.details }} |"
             echo "| Release and Tag | ${{ needs.release-and-tag.outputs.status }} | ${{ needs.release-and-tag.outputs.details }} |"
             echo ""

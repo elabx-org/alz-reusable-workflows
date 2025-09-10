@@ -1,27 +1,27 @@
 {
   "backup_instance_name": "${BACKUP_INSTANCE_NAME}",
   "properties": {
+    "friendlyName": "${STORAGE_ACCOUNT}",
     "dataSourceInfo": {
+      "resourceID": "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}",
+      "resourceUri": "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}",
       "datasourceType": "Microsoft.Storage/storageAccounts/blobServices",
-      "objectType": "Datasource",
-      "resourceID": "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}/blobServices/default",
-      "resourceLocation": "${LOCATION}",
       "resourceName": "${STORAGE_ACCOUNT}",
       "resourceType": "Microsoft.Storage/storageAccounts",
-      "resourceUri": "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/${STORAGE_ACCOUNT}"
+      "resourceLocation": "${LOCATION}",
+      "objectType": "Datasource"
     },
     "policyInfo": {
       "policyId": "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.DataProtection/backupVaults/${BACKUP_VAULT_NAME}/backupPolicies/${BACKUP_POLICY_NAME}",
       "policyParameters": {
         "backupDatasourceParametersList": [
           {
-            "objectType": "AzureBackupBlobDataSourceParameter",
+            "objectType": "BlobBackupDatasourceParameters",
             "containersList": []
           }
         ]
       }
     },
-    "objectType": "BackupInstance",
-    "friendlyName": "${STORAGE_ACCOUNT}"
+    "objectType": "BackupInstance"
   }
 }

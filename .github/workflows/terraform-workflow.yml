@@ -5,8 +5,6 @@ on:
   workflow_call:
     inputs:
       runs_on: {type: string, description: 'JSON string defining the runner.', required: true}
-      check_tfstate_storage: {type: boolean, description: 'Run the check tfstate storage job', default: true}
-      tfstate_storage_script: {type: string, description: 'Path to the tfstate storage check script', default: './scripts/create-tfstate-storage.sh --checks-only'}
       terraform_init_args: {type: string, description: 'Additional arguments for terraform init', default: ''}
       terraform_plan_args: {type: string, description: 'Additional arguments for terraform plan', default: ''}
       terraform_test_args: {type: string, description: 'Additional arguments for terraform test', default: ''}
@@ -21,21 +19,30 @@ on:
       terraform_validate: {type: boolean, description: 'Enable Terraform validate step', default: false}
       environment_plan: {type: string, description: 'GitHub environment to use for plan', required: true}
       environment_apply: {type: string, description: 'GitHub environment to use for apply', required: true}
+      install_kubelogin: {type: boolean, description: 'Whether or not to install kubelogin. Required if deploying Kubernetes manifests to AKS via Terraform.', default: false}
       tf_docs_enabled: {type: boolean, description: 'Generate Terraform docs', default: true}
       tf_docs_output_file: {type: string, description: 'Output file for Terraform docs', default: 'README.md'}
       tf_docs_config_file: {type: string, description: 'Config file for Terraform docs', default: '.terraform-docs.yml'}
       arm_client_id: {type: string, description: 'Azure Client ID for OIDC authentication', required: true}
       arm_tenant_id: {type: string, description: 'Azure Tenant ID for OIDC authentication', required: true}
       arm_subscription_id: {type: string, description: 'Azure Subscription ID for OIDC authentication', required: true}
+      check_tfstate_storage: {type: boolean, description: 'Run the terraform backend check job', default: true}
+      tfstate_storage_script: {type: string, description: 'Path to the tfstate storage check script', default: './scripts/create-tfstate-storage.sh --checks-only'}
       terraform_backend_resource_group: {type: string, required: true}
       terraform_backend_location: {type: string, required: true}
       terraform_backend_storage_account: {type: string, required: true}
       terraform_backend_container: {type: string, required: true}
       terraform_backend_sku: {type: string, required: true}
       terraform_backend_env: {type: string, required: true}
+      terraform_backend_key_descriptor: {type: string, description: 'Key descriptor for the Terraform backend', default: ''}
       terraform_backend_location_short: {type: string, required: true}
+      terraform_backend_mode: {type: string, description: 'Run mode (checks-only, backup-only, infra-only, or create)', required: false, default: 'checks-only'}
+      terraform_backend_backups_checks: {type: boolean, description: 'Enable Terraform backend backup checks', default: true}
+      reusable_workflow_branch: {type: string, description: 'sets default checkout branch for reusable-workflow repo', required: false, default: 'main'}
       custom_backend_config: {type: string, description: 'Custom backend configuration (overrides default if provided)', required: false, default: ''}
       use_artifactory_token: {type: boolean, default: false, description: 'Use Artifactory token or not'}
+      terraform_plan_file_key: {type: string, default: '', description: 'Prefix to be added to the plan file name'}
+      terraform_version: {type: string, description: 'Terraform version to use', required: false, default: '1.9.7'}
     secrets:
       GH_PAT: {required: true}
       ARTIFACTORY_ACCESS_TOKEN: {required: false}
@@ -60,10 +67,12 @@ env:
   TERRAFORM_BACKEND_SKU: ${{ inputs.terraform_backend_sku }}
   TERRAFORM_BACKEND_ENV: ${{ inputs.terraform_backend_env }}
   TERRAFORM_BACKEND_LOCATION_SHORT: ${{ inputs.terraform_backend_location_short }}
+  TERRAFORM_BACKEND_KEY_DESCRIPTOR: ${{ inputs.terraform_backend_key_descriptor }}
+  RESUABLE_WORKFLOW_REF: ${{ inputs.reusable_workflow_branch }}
 
 jobs:
-  check-tfstate-storage:
-    name: 'check-backend'
+  check-tf-backend:
+    name: 'backend-check'
     if: ${{ inputs.check_tfstate_storage }}
     runs-on: >-
       ${{
@@ -73,16 +82,36 @@ jobs:
       }}
     environment: ${{ inputs.environment_plan }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
         with:
-          clean: true
-      - uses: azure/login@v2
+          repository: org-redacted/alz-reusable-workflows
+          path: ./alz-reusable-workflows
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+          ref: ${{ env.RESUABLE_WORKFLOW_REF }}
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # V2
         with:
           client-id: ${{ env.ARM_CLIENT_ID }}
           tenant-id: ${{ env.ARM_TENANT_ID }}
           subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
-      - name: Run tfstate Storage Check
-        run: bash ${{ inputs.tfstate_storage_script }}
+      - name: TF Backend Check
+        uses: ./alz-reusable-workflows/.github/actions/terraform-backend-create
+        with:
+          environment: ${{ inputs.environment_plan }}
+          client_id: ${{ env.ARM_CLIENT_ID }}
+          tenant_id: ${{ env.ARM_TENANT_ID }}
+          subscription_id: ${{ env.ARM_SUBSCRIPTION_ID }}
+          tf_backend_mode: ${{ inputs.terraform_backend_mode }}
+          tf_backend_sa_rg: ${{ inputs.terraform_backend_resource_group }}
+          tf_backend_sa: ${{ inputs.terraform_backend_storage_account }}
+          tf_backend_sa_container: ${{ inputs.terraform_backend_container }}
+          tf_backend_sa_region: ${{ inputs.terraform_backend_location }}
+          tf_backend_sa_region_short: ${{ inputs.terraform_backend_location_short }}
+          tf_backend_sa_key_descriptor: ${{ inputs.terraform_backend_key_descriptor }}
+          tf_backend_sa_sku: ${{ inputs.terraform_backend_sku }}
+          tf_backend_env: ${{ inputs.terraform_backend_env }}
+          run_backup_checks: ${{ inputs.terraform_backend_backups_checks }}
 
   terraform-docs:
     name: 'docs'
@@ -115,7 +144,7 @@ jobs:
           sudo chmod -R 777 .git
 
       - name: Checkout caller repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
         with:
           fetch-depth: 0
           clean: true
@@ -124,11 +153,11 @@ jobs:
           ref: ${{ steps.set-branch.outputs.branch_name }}
 
       - name: Checkout reusable-workflow repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
         with:
-          repository: elabx-org/alz-reusable-workflows
+          repository: org-redacted/alz-reusable-workflows
           path: ./alz-reusable-workflows
-          ref: main
+          ref: ${{ env.RESUABLE_WORKFLOW_REF }}
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 0
 
@@ -142,7 +171,7 @@ jobs:
   terraform-plan:
     name: 'plan'
     if: inputs.terraform_plan
-    needs: check-tfstate-storage
+    needs: check-tf-backend
     runs-on: >-
       ${{
         (contains(inputs.runs_on, '{') && contains(inputs.runs_on, '}'))
@@ -158,23 +187,29 @@ jobs:
          git config --global url."https://oauth2:${{ secrets.GH_PAT }}@github.com".insteadOf "ssh://git@github.com"
 
       - name: Checkout caller repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
 
       - name: Checkout reusable-workflow repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
         with:
-          repository: elabx-org/alz-reusable-workflows
+          repository: org-redacted/alz-reusable-workflows
           path: ./alz-reusable-workflows
-          ref: main
+          ref: ${{ env.RESUABLE_WORKFLOW_REF }}
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 0
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # V2
         with:
           client-id: ${{ env.ARM_CLIENT_ID }}
           tenant-id: ${{ env.ARM_TENANT_ID }}
           subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      - name: Install Kubelogin
+        if: inputs.install_kubelogin
+        uses: azure/use-kubelogin@76597ae0fcbaace21b05e13a2cbf8daee2c6e820  # V1
+        with:
+          kubelogin-version: 'v0.2.7'
 
       - name: Construct Backend Config
         id: backend_config
@@ -183,7 +218,7 @@ jobs:
             echo "config=${{ inputs.custom_backend_config }}" >> "$GITHUB_OUTPUT"
           else
             DEFAULT_CONFIG="-backend-config=\"container_name=${{ inputs.terraform_backend_container }}\" \
-            -backend-config=\"key=${{ inputs.terraform_backend_container }}-${{ inputs.terraform_backend_location_short }}-${{ inputs.terraform_backend_env }}.tfstate\" \
+            -backend-config=\"key=${{ inputs.terraform_backend_container }}-${{ inputs.terraform_backend_location_short }}-${{ inputs.terraform_backend_env }}${{ inputs.terraform_backend_key_descriptor }}.tfstate\" \
             -backend-config=\"storage_account_name=${{ inputs.terraform_backend_storage_account }}\" \
             -backend-config=\"resource_group_name=${{ inputs.terraform_backend_resource_group }}\""
             echo "config=$DEFAULT_CONFIG" >> "$GITHUB_OUTPUT"
@@ -194,6 +229,7 @@ jobs:
         uses: ./alz-reusable-workflows/.github/actions/terraform-operations
         with:
           working_directory: ${{ inputs.terraform_working_dir }}
+          terraform_version: ${{ inputs.terraform_version }}
           operation: 'format'
 
       - name: Terraform Init
@@ -204,6 +240,7 @@ jobs:
           working_directory: ${{ inputs.terraform_working_dir }}
           backend_config: ${{ steps.backend_config.outputs.config }}
           init_args: ${{ inputs.terraform_init_args }}
+          terraform_version: ${{ inputs.terraform_version }}
           operation: 'init'
 
       - name: Terraform Validate
@@ -211,6 +248,7 @@ jobs:
         uses: ./alz-reusable-workflows/.github/actions/terraform-operations
         with:
           working_directory: ${{ inputs.terraform_working_dir }}
+          terraform_version: ${{ inputs.terraform_version }}
           operation: 'validate'
 
       - name: Terraform Test
@@ -222,6 +260,7 @@ jobs:
         with:
           working_directory: "${{ inputs.terraform_working_dir }}"
           test_args: "-test-directory='./unit-test-directory' ${{ inputs.terraform_test_args }}"
+          terraform_version: ${{ inputs.terraform_version }}
           operation: 'test'
           secret_variables_json: ${{ secrets.SECRET_VARIABLES_JSON }}
 
@@ -234,19 +273,21 @@ jobs:
         with:
           working_directory: ${{ inputs.terraform_working_dir }}
           plan_args: ${{ inputs.terraform_plan_args }}
+          terraform_version: ${{ inputs.terraform_version }}
           operation: 'plan'
           secret_variables_json: ${{ secrets.SECRET_VARIABLES_JSON }}
+          plan_key: ${{ inputs.terraform_plan_file_key }}
 
       - name: Publish Terraform Plan
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # V4
         with:
-          name: tfplan
-          path: ${{ inputs.terraform_working_dir }}/tfplan
+          name: ${{ inputs.terraform_plan_file_key }}tfplan
+          path: ${{ inputs.terraform_working_dir }}/${{ inputs.terraform_plan_file_key }}tfplan
 
       - name: Create String Output
         id: tf-plan-string
         run: |
-          TERRAFORM_PLAN=$(terraform -chdir="${{ inputs.terraform_working_dir }}" show -no-color tfplan)
+          TERRAFORM_PLAN=$(terraform -chdir="${{ inputs.terraform_working_dir }}" show -no-color "${{ inputs.terraform_plan_file_key }}tfplan")
 
           delimiter="$(openssl rand -hex 8)"
           {
@@ -269,7 +310,7 @@ jobs:
 
       - name: Push Terraform Output to PR
         if: ${{ inputs.push_plan_to_pr && github.event_name == 'pull_request' }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # V7
         env:
           SUMMARY: "${{ steps.tf-plan-string.outputs.summary }}"
         with:
@@ -307,28 +348,34 @@ jobs:
           git config --global url."https://oauth2:${{ secrets.GH_PAT }}@github.com".insteadOf "ssh://git@github.com"
 
       - name: Checkout caller repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
 
       - name: Checkout reusable-workflow repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
         with:
-          repository: elabx-org/alz-reusable-workflows
+          repository: org-redacted/alz-reusable-workflows
           path: ./alz-reusable-workflows
-          ref: main
+          ref: ${{ env.RESUABLE_WORKFLOW_REF }}
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 0
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # V2
         with:
           client-id: ${{ env.ARM_CLIENT_ID }}
           tenant-id: ${{ env.ARM_TENANT_ID }}
           subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
 
-      - name: Download Terraform Plan
-        uses: actions/download-artifact@v4
+      - name: Install Kubelogin
+        if: inputs.install_kubelogin
+        uses: azure/use-kubelogin@76597ae0fcbaace21b05e13a2cbf8daee2c6e820  # V1
         with:
-          name: tfplan
+          kubelogin-version: 'v0.2.7'
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # V4
+        with:
+          name: ${{ inputs.terraform_plan_file_key }}tfplan
           path: ${{ inputs.terraform_working_dir }}
 
       - name: Construct Backend Config
@@ -338,7 +385,7 @@ jobs:
             echo "config=${{ inputs.custom_backend_config }}" >> "$GITHUB_OUTPUT"
           else
             DEFAULT_CONFIG="-backend-config=\"container_name=${{ inputs.terraform_backend_container }}\" \
-            -backend-config=\"key=${{ inputs.terraform_backend_container }}-${{ inputs.terraform_backend_location_short }}-${{ inputs.terraform_backend_env }}.tfstate\" \
+            -backend-config=\"key=${{ inputs.terraform_backend_container }}-${{ inputs.terraform_backend_location_short }}-${{ inputs.terraform_backend_env }}${{ inputs.terraform_backend_key_descriptor }}.tfstate\" \
             -backend-config=\"storage_account_name=${{ inputs.terraform_backend_storage_account }}\" \
             -backend-config=\"resource_group_name=${{ inputs.terraform_backend_resource_group }}\""
             echo "config=$DEFAULT_CONFIG" >> "$GITHUB_OUTPUT"
@@ -352,6 +399,7 @@ jobs:
           working_directory: ${{ inputs.terraform_working_dir }}
           backend_config: ${{ steps.backend_config.outputs.config }}
           init_args: ${{ inputs.terraform_init_args }}
+          terraform_version: ${{ inputs.terraform_version }}
           operation: 'init'
 
       - name: Terraform Apply
@@ -361,7 +409,9 @@ jobs:
         with:
           working_directory: ${{ inputs.terraform_working_dir }}
           operation: 'apply'
+          terraform_version: ${{ inputs.terraform_version }}
           secret_variables_json: ${{ secrets.SECRET_VARIABLES_JSON }}
+          plan_key: ${{ inputs.terraform_plan_file_key }}
 
   terraform-checks:
     name: 'checks'
@@ -380,23 +430,29 @@ jobs:
           git config --global url."https://oauth2:${{ secrets.GH_PAT }}@github.com".insteadOf ssh://git@github.com
 
       - name: Checkout caller repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
 
       - name: Checkout reusable-workflow repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
         with:
-          repository: elabx-org/alz-reusable-workflows
+          repository: org-redacted/alz-reusable-workflows
           path: ./alz-reusable-workflows
-          ref: main
+          ref: ${{ env.RESUABLE_WORKFLOW_REF }}
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 0
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # V2
         with:
           client-id: ${{ env.ARM_CLIENT_ID }}
           tenant-id: ${{ env.ARM_TENANT_ID }}
           subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      - name: Install Kubelogin
+        if: inputs.install_kubelogin
+        uses: azure/use-kubelogin@76597ae0fcbaace21b05e13a2cbf8daee2c6e820  # V1
+        with:
+          kubelogin-version: 'v0.2.7'
 
       - name: Terraform Checks Init
         uses: ./alz-reusable-workflows/.github/actions/terraform-operations
@@ -405,6 +461,7 @@ jobs:
         with:
           working_directory: "${{ inputs.terraform_working_dir }}/checks-test-directory"
           init_args: ${{ inputs.terraform_init_args }}
+          terraform_version: ${{ inputs.terraform_version }}
           operation: 'init'
 
       - name: Terraform Checks Apply
@@ -414,6 +471,7 @@ jobs:
         with:
           working_directory: "${{ inputs.terraform_working_dir }}/checks-test-directory"
           operation: 'check'
+          terraform_version: ${{ inputs.terraform_version }}
           checks_args: ${{ inputs.terraform_checks_args }}
           secret_variables_json: ${{ secrets.SECRET_VARIABLES_JSON }}
 

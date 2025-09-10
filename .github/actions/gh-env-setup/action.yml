@@ -1,0 +1,149 @@
+---
+name: 'Setup GitHub Environments and Variables'
+description: 'Creates GitHub environments and sets up environment/repository variables'
+
+inputs:
+  github_token:
+    required: true
+  config:
+    required: true
+  region:
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get region configuration
+      id: region-config
+      shell: bash
+      run: |
+        # Split regions into array
+        IFS=',' read -ra REGION_ARRAY <<< "${{ inputs.region }}"
+
+        # Initialise empty strings for outputs
+        REGION_SHORT=""
+        REGION_FULL=""
+        STORAGE_SKU=""
+
+        # Process each region
+        for region in "${REGION_ARRAY[@]}"; do
+          case "$region" in
+            "uks")
+              REGION_SHORT="${REGION_SHORT}${REGION_SHORT:+,}uks"
+              REGION_FULL="${REGION_FULL}${REGION_FULL:+,}UKSouth"
+              STORAGE_SKU="${STORAGE_SKU}${STORAGE_SKU:+,}Standard_ZRS"
+              ;;
+            "ukw")
+              REGION_SHORT="${REGION_SHORT}${REGION_SHORT:+,}ukw"
+              REGION_FULL="${REGION_FULL}${REGION_FULL:+,}UKWest"
+              STORAGE_SKU="${STORAGE_SKU}${STORAGE_SKU:+,}Standard_LRS"
+              ;;
+          esac
+        done
+
+        echo "region_short=$REGION_SHORT" >> $GITHUB_OUTPUT
+        echo "region_full=$REGION_FULL" >> $GITHUB_OUTPUT
+        echo "storage_sku=$STORAGE_SKU" >> $GITHUB_OUTPUT
+
+    - name: Set repository variables
+      shell: bash
+      run: |
+        API_URL="https://api.github.com/repos/${{ github.repository }}/actions/variables"
+        CONFIG='${{ inputs.config }}'
+
+        # Set RUNNER_CONFIG
+        RUNNER_CONFIG=$(echo '{"group":"replacesvcs","labels":["self-hosted","prod","linuxdefender"]}' | jq -c '.' | jq -R '.')
+
+        # Check if RUNNER_CONFIG exists
+        CURRENT_VALUE=$(curl -s -H "Authorization: Bearer ${{ inputs.github_token }}" \
+          "$API_URL/RUNNER_CONFIG" | jq -r '.value // empty')
+
+        if [ "$CURRENT_VALUE" != "$RUNNER_CONFIG" ]; then
+          curl -s -X POST "$API_URL" \
+            -H "Authorization: Bearer ${{ inputs.github_token }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d "{\"name\":\"RUNNER_CONFIG\",\"value\":$RUNNER_CONFIG}"
+        fi
+
+        # Set ARM_TENANT_ID
+        TENANT_ID=$(echo "$CONFIG" | jq -r '.tenant_id')
+        CURRENT_TENANT=$(curl -s -H "Authorization: Bearer ${{ inputs.github_token }}" \
+          "$API_URL/ARM_TENANT_ID" | jq -r '.value // empty')
+
+        if [ "$CURRENT_TENANT" != "$TENANT_ID" ]; then
+          curl -s -X POST "$API_URL" \
+            -H "Authorization: Bearer ${{ inputs.github_token }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d "{\"name\":\"ARM_TENANT_ID\",\"value\":\"$TENANT_ID\"}"
+        fi
+
+    - name: Setup environments
+      shell: bash
+      run: |
+        API_URL="https://api.github.com/repos/${{ github.repository }}"
+        CONFIG='${{ inputs.config }}'
+
+        # Parse config
+        PROJECT_NAME=$(echo "$CONFIG" | jq -r '.project_name')
+        ENVIRONMENTS=$(echo "$CONFIG" | jq -r '.environments')
+        SUBSCRIPTION_IDS=$(echo "$CONFIG" | jq -r '.subscription_ids')
+        CLIENT_IDS=$(echo "$CONFIG" | jq -r '.client_ids')
+        STORAGE_SUFFIX=$(echo "$CONFIG" | jq -r '.storage_suffix')
+
+        # Split the comma-separated strings into arrays
+        IFS=',' read -ra ENV_ARRAY <<< "$ENVIRONMENTS"
+        IFS=',' read -ra SUB_ARRAY <<< "$SUBSCRIPTION_IDS"
+        IFS=',' read -ra CLIENT_ARRAY <<< "$CLIENT_IDS"
+        IFS=',' read -ra REGION_ARRAY <<< "${{ inputs.region }}"
+        IFS=',' read -ra REGION_SHORT_ARRAY <<< "${{ steps.region-config.outputs.region_short }}"
+        IFS=',' read -ra REGION_FULL_ARRAY <<< "${{ steps.region-config.outputs.region_full }}"
+        IFS=',' read -ra STORAGE_SKU_ARRAY <<< "${{ steps.region-config.outputs.storage_sku }}"
+
+        # Loop through each region
+        for i in "${!REGION_ARRAY[@]}"; do
+          REGION="${REGION_ARRAY[$i]}"
+          REGION_SHORT="${REGION_SHORT_ARRAY[$i]}"
+          REGION_FULL="${REGION_FULL_ARRAY[$i]}"
+          STORAGE_SKU="${STORAGE_SKU_ARRAY[$i]}"
+
+          # Loop through each environment
+          for j in "${!ENV_ARRAY[@]}"; do
+            ENVIRONMENT="${ENV_ARRAY[$j]}"
+            SUB_ID="${SUB_ARRAY[$j]}"
+            CLIENT_ID="${CLIENT_ARRAY[$j]}"
+
+            for TYPE in "plan" "apply"; do
+              # Include region in environment name
+              ENV_NAME="$REGION $ENVIRONMENT $TYPE"
+              ENCODED_ENV_NAME=$(echo "$ENV_NAME" | sed 's/ /%20/g')
+
+              # Create environment
+              curl -s -X PUT "$API_URL/environments/$ENCODED_ENV_NAME" \
+                -H "Authorization: Bearer ${{ inputs.github_token }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                -d "{}"
+
+              # Set environment variables
+              declare -A vars=(
+                ["APPLY_ENV"]="$REGION $ENVIRONMENT apply"
+                ["PLAN_ENV"]="$REGION $ENVIRONMENT plan"
+                ["TF_BACKEND_ENV"]="$ENVIRONMENT"
+                ["TF_BACKEND_SA"]="orgsttf${PROJECT_NAME}${ENVIRONMENT}${REGION_SHORT}${STORAGE_SUFFIX}"
+                ["TF_BACKEND_SA_REGION"]="${REGION_FULL}"
+                ["TF_BACKEND_SA_REGION_SHORT"]="${REGION_SHORT}"
+                ["TF_BACKEND_SA_RG"]="rg-tfstate-${PROJECT_NAME}-storage-${REGION_SHORT}-${STORAGE_SUFFIX}"
+                ["TF_BACKEND_SA_SKU"]="${STORAGE_SKU}"
+                ["ARM_CLIENT_ID"]="$CLIENT_ID"
+                ["ARM_SUBSCRIPTION_ID"]="$SUB_ID"
+                ["TF_BACKEND_SA_CONTAINER"]="platform-${PROJECT_NAME}-${ENVIRONMENT}"
+              )
+
+              for key in "${!vars[@]}"; do
+                curl -s -X POST "$API_URL/environments/$ENCODED_ENV_NAME/variables" \
+                  -H "Authorization: Bearer ${{ inputs.github_token }}" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  -d "{\"name\":\"$key\", \"value\":\"${vars[$key]}\"}"
+              done
+            done
+          done
+        done

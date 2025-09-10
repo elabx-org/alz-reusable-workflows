@@ -1,0 +1,54 @@
+---
+name: Deploy to AKS
+
+on:
+  workflow_call:
+    inputs:
+      environment: {description: 'Deployment Environment from GH', type: string}
+      reusable_workflow_branch: {description: 'Reusable workflow branch', type: string, default: 'main'}
+      image-tag: {description: 'Container image tag to deploy', type: string, required: true}
+      namespace: {description: 'Kubernetes namespace', type: string, required: true}
+      cluster_name: {description: 'AKS cluster name', type: string, required: true}
+      resource_group: {description: 'Azure resource group', type: string, required: true}
+      image_name: {description: 'Container image name including registry', type: string, required: true}
+      manifest_path: {description: 'Path to Kubernetes manifest file', type: string, required: true}
+      dry_run: {description: 'Validate deployment without applying changes', type: boolean, required: false, default: false}
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  deploy:
+    runs-on: >-
+      ${{
+        (contains(vars.RUNNER_CONFIG, '{') && contains(vars.RUNNER_CONFIG, '}'))
+        && (fromJSON(vars.RUNNER_CONFIG).runner || fromJSON(vars.RUNNER_CONFIG).labels)
+        || vars.RUNNER_CONFIG
+      }}
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # V4
+        with:
+          repository: org-redacted/alz-reusable-workflows
+          path: ./alz-reusable-workflows
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+          ref: ${{ inputs.reusable_workflow_branch }}
+
+      - name: Deploy to AKS
+        uses: ./alz-reusable-workflows/.github/actions/deploy-aks-manifest
+        with:
+          client_id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant_id: ${{ vars.AZURE_TENANT_ID }}
+          subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          cluster-name: ${{ inputs.cluster_name }}
+          resource-group: ${{ inputs.resource_group }}
+          manifest-path: ${{ inputs.manifest_path }}
+          image-name: ${{ inputs.image_name }}
+          image-tag: ${{ inputs.image-tag }}
+          namespace: ${{ inputs.namespace }}
+          dry-run: ${{ inputs.dry_run }}

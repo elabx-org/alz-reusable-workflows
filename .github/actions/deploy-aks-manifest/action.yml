@@ -1,0 +1,144 @@
+---
+name: 'Deploy AKS Manifest'
+description: 'Deploy Kubernetes manifests to Azure Kubernetes Service with variable substitution'
+
+inputs:
+  client_id: {description: 'Azure client ID for OIDC authentication', required: true}
+  tenant_id: {description: 'Azure tenant ID for OIDC authentication', required: true}
+  subscription_id: {description: 'Azure subscription ID', required: true}
+  cluster-name: {description: 'AKS cluster name', required: true}
+  resource-group: {description: 'Azure resource group containing AKS cluster', required: true}
+  manifest-path: {description: 'Path to Kubernetes manifest file', required: true}
+  image-name: {description: 'Container image name including registry', required: true}
+  image-tag: {description: 'Container image tag to deploy', required: true}
+  namespace: {description: 'Kubernetes namespace for deployment', required: true}
+  dry-run: {description: 'Validate deployment without applying changes', required: false, default: 'false'}
+  strategy: {description: 'Deployment strategy (basic, canary, blue-green)', required: false, default: 'basic'}
+  force: {description: 'Force apply resources', required: false, default: 'false'}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate Inputs
+      shell: bash
+      run: |
+        echo "🔍 Validating inputs..."
+        if [[ ! -f "${{ inputs.manifest-path }}" ]]; then
+          echo "❌ Error: Manifest file not found at ${{ inputs.manifest-path }}"
+          exit 1
+        fi
+        echo "✅ Manifest: ${{ inputs.manifest-path }}"
+
+    - name: Azure Login
+      uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # V2
+      with:
+        client-id: ${{ inputs.client_id }}
+        tenant-id: ${{ inputs.tenant_id }}
+        subscription-id: ${{ inputs.subscription_id }}
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@0c5e050edfed71b2b50731ab044d42489d51c129  # V4
+
+    - name: Get AKS Credentials
+      uses: azure/aks-set-context@c7eb093e5a5d47caa333f64974d5fd1cd4bf069d  # V4
+      with:
+        cluster-name: ${{ inputs.cluster-name }}
+        resource-group: ${{ inputs.resource-group }}
+        admin: false
+        use-kubelogin: true
+
+    - name: Prepare and Validate Deployment
+      shell: bash
+      run: |
+        export IMAGE_NAME="${{ inputs.image-name }}"
+        export IMAGE_TAG="${{ inputs.image-tag }}"
+        export NAMESPACE="${{ inputs.namespace }}"
+
+        # 1. Validate resource group
+        echo "🔍 Validating resource group '${{ inputs.resource-group }}'..."
+        if ! az group show --name "${{ inputs.resource-group }}" &> /dev/null; then
+          echo "❌ Error: Resource group '${{ inputs.resource-group }}' not found"
+          exit 1
+        fi
+        echo "✅ Resource group: ${{ inputs.resource-group }}"
+
+        # 2. Create namespace if not exists
+        echo "🔍 Checking for namespace '$NAMESPACE'..."
+        if ! kubectl get namespace "$NAMESPACE" &> /dev/null; then
+          kubectl create namespace "$NAMESPACE" > /dev/null
+          echo "✅ Created namespace: $NAMESPACE"
+        else
+          echo "✅ Using namespace: $NAMESPACE"
+        fi
+
+        # 3. Prepare manifest file
+        echo "📝 Preparing deployment: $IMAGE_NAME:$IMAGE_TAG → $NAMESPACE"
+        TEMP_DIR=$(mktemp -d)
+        PROCESSED_MANIFEST="$TEMP_DIR/manifest.yaml"
+
+        # Replace variables in the manifest
+        cat "${{ inputs.manifest-path }}" | envsubst > "$PROCESSED_MANIFEST"
+
+        # Store path for later steps
+        echo "MANIFEST_FILE=$PROCESSED_MANIFEST" >> $GITHUB_ENV
+        echo "IMAGE_WITH_TAG=$IMAGE_NAME:$IMAGE_TAG" >> $GITHUB_ENV
+
+        echo "✅ Manifest processed and ready for deployment"
+
+        # 4. Validate using kubectl (dry-run) if needed
+        if [[ "${{ inputs.dry-run }}" == "true" ]]; then
+          echo "🔍 Performing dry-run validation..."
+          kubectl apply -f "$PROCESSED_MANIFEST" --dry-run=server -n "$NAMESPACE"
+          echo "✅ Validation successful (no changes applied)"
+          exit 0  # Exit early as we don't need to do the actual deployment
+        fi
+
+    - name: Deploy to AKS
+      if: ${{ inputs.dry-run != 'true' }}
+      id: deploy
+      uses: Azure/k8s-deploy@b0f33712c6b266c3ddd7e96416fcc7a7837d98dc  # V5
+      with:
+        namespace: ${{ inputs.namespace }}
+        manifests: ${{ env.MANIFEST_FILE }}
+        action: deploy
+        strategy: ${{ inputs.strategy }}
+        images: ${{ env.IMAGE_WITH_TAG }}
+        force: ${{ inputs.force == 'true' }}
+        pull-images: false
+
+    - name: Show deployment summary
+      if: ${{ inputs.dry-run != 'true' }}
+      shell: bash
+      run: |
+        export NAMESPACE="${{ inputs.namespace }}"
+
+        echo "🚀 Deployment completed!"
+        echo "──────────────────────────────────────"
+
+        # Get deployments with compact output
+        echo "📊 DEPLOYMENTS:"
+        kubectl get deployments -n "$NAMESPACE" --no-headers | awk '{print "   " $1 ":" "\t" $2 " ready," "\tAge: " $5}'
+
+        # Get pods with compact output
+        echo ""
+        echo "🔄 PODS STATUS:"
+        kubectl get pods -n "$NAMESPACE" --no-headers | awk '{status=$3; color="✅"; if(status!="Running") color="⚠️"; print "   " color " " $1 ":\t" status}'
+
+        # Show event summary - just errors and warnings
+        WARNINGS=$(kubectl get events -n "$NAMESPACE" --field-selector type=Warning --no-headers | wc -l)
+        if [ "$WARNINGS" -gt 0 ]; then
+          echo ""
+          echo "⚠️ WARNING EVENTS ($WARNINGS):"
+          kubectl get events -n "$NAMESPACE" --field-selector type=Warning --no-headers | tail -3 | awk '{print "   • " $4 " " $5 ": " $7 " " $8 " " $9 " " $10}'
+        fi
+
+        # Final status summary
+        FAILED_PODS=$(kubectl get pods -n "$NAMESPACE" --field-selector status.phase!=Running,status.phase!=Succeeded --no-headers | wc -l)
+        if [ "$FAILED_PODS" -gt 0 ]; then
+          echo ""
+          echo "⚠️ $FAILED_PODS pods are not running. Check with 'kubectl get pods -n $NAMESPACE' for details."
+        else
+          echo ""
+          echo "✨ All pods running successfully!"
+        fi
+        echo "──────────────────────────────────────"
