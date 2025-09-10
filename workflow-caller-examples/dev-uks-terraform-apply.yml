@@ -1,0 +1,153 @@
+name: 'dev - uks - terraform apply'
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main    
+    paths:
+      - terraform/*.tf
+      - terraform/config/global.tfvars
+      - terraform/config/uks/dev/**
+      - .github/workflows/dev-uks*.yml
+      - '!README.md'
+
+concurrency:
+  group: workflow-tf-dev-uks
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  variables:
+    name: "set-vars"
+    environment: "uks dev plan" 
+    runs-on: >- 
+      ${{ 
+        (contains(vars.RUNNER_CONFIG, '{') && contains(vars.RUNNER_CONFIG, '}'))
+        && (fromJSON(vars.RUNNER_CONFIG).runner || fromJSON(vars.RUNNER_CONFIG).labels)
+        || vars.RUNNER_CONFIG
+      }}
+    steps:
+      - name: Set and Output Variables
+        id: set_vars
+        run: |
+          RUNNER_CONFIG='${{ vars.RUNNER_CONFIG }}'
+          RUNNER_JSON=$(echo "$RUNNER_CONFIG" | jq -c '. | {runner: .runner, group: .group, labels: .labels}')
+          echo "RUNNER=$RUNNER_JSON" >> $GITHUB_OUTPUT
+
+          # Define the order of variables
+          var_order=(RUNNER ARM_TENANT_ID ARM_SUBSCRIPTION_ID ARM_CLIENT_ID ENVIRONMENT_PLAN ENVIRONMENT_APPLY TERRAFORM_BACKEND_RESOURCE_GROUP TERRAFORM_BACKEND_STORAGE_ACCOUNT TERRAFORM_BACKEND_LOCATION TERRAFORM_BACKEND_LOCATION_SHORT TERRAFORM_BACKEND_CONTAINER TERRAFORM_BACKEND_SKU TERRAFORM_BACKEND_ENV)
+
+
+          # Define the variables and their values
+          declare -A vars=(
+            ["RUNNER"]="$RUNNER_JSON"
+            ["ENVIRONMENT_PLAN"]="${{ vars.PLAN_ENV }}"
+            ["ENVIRONMENT_APPLY"]="${{ vars.APPLY_ENV }}"
+            ["TERRAFORM_BACKEND_RESOURCE_GROUP"]="${{ vars.TF_BACKEND_SA_RG }}"
+            ["TERRAFORM_BACKEND_STORAGE_ACCOUNT"]="${{ vars.TF_BACKEND_SA }}"
+            ["TERRAFORM_BACKEND_LOCATION"]="${{ vars.TF_BACKEND_SA_REGION }}"
+            ["TERRAFORM_BACKEND_LOCATION_SHORT"]="${{ vars.TF_BACKEND_SA_REGION_SHORT }}"
+            ["TERRAFORM_BACKEND_CONTAINER"]="${{ vars.TF_BACKEND_SA_CONTAINER }}"
+            ["TERRAFORM_BACKEND_SKU"]="${{ vars.TF_BACKEND_SA_SKU }}"
+            ["TERRAFORM_BACKEND_ENV"]="${{ vars.TF_BACKEND_ENV }}"
+            ["ARM_TENANT_ID"]="${{ vars.ARM_TENANT_ID }}"
+            ["ARM_SUBSCRIPTION_ID"]="${{ vars.ARM_SUBSCRIPTION_ID }}"
+            ["ARM_CLIENT_ID"]="${{ vars.ARM_CLIENT_ID }}"
+          )
+
+          # Output variables to GITHUB_OUTPUT
+          for key in "${var_order[@]}"; do
+            echo "$key=${vars[$key]}" >> $GITHUB_OUTPUT
+          done
+
+          # Create summary table
+          {
+            echo "| Variable | Value |"
+            echo "|----------|-------|"
+            for key in "${var_order[@]}"; do
+              echo "| $key | ${vars[$key]} |"
+            done
+          } >> $GITHUB_STEP_SUMMARY
+
+    outputs:
+      RUNNER: ${{ steps.set_vars.outputs.RUNNER }}
+      ENVIRONMENT_PLAN: ${{ steps.set_vars.outputs.ENVIRONMENT_PLAN }}
+      ENVIRONMENT_APPLY: ${{ steps.set_vars.outputs.ENVIRONMENT_APPLY }}
+      TERRAFORM_BACKEND_RESOURCE_GROUP: ${{ steps.set_vars.outputs.TERRAFORM_BACKEND_RESOURCE_GROUP }}
+      TERRAFORM_BACKEND_STORAGE_ACCOUNT: ${{ steps.set_vars.outputs.TERRAFORM_BACKEND_STORAGE_ACCOUNT }}
+      TERRAFORM_BACKEND_LOCATION: ${{ steps.set_vars.outputs.TERRAFORM_BACKEND_LOCATION }}
+      TERRAFORM_BACKEND_LOCATION_SHORT: ${{ steps.set_vars.outputs.TERRAFORM_BACKEND_LOCATION_SHORT }}
+      TERRAFORM_BACKEND_CONTAINER: ${{ steps.set_vars.outputs.TERRAFORM_BACKEND_CONTAINER }}
+      TERRAFORM_BACKEND_SKU: ${{ steps.set_vars.outputs.TERRAFORM_BACKEND_SKU }}
+      TERRAFORM_BACKEND_ENV: ${{ steps.set_vars.outputs.TERRAFORM_BACKEND_ENV }}
+      ARM_TENANT_ID: ${{ steps.set_vars.outputs.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ steps.set_vars.outputs.ARM_SUBSCRIPTION_ID }}
+      ARM_CLIENT_ID: ${{ steps.set_vars.outputs.ARM_CLIENT_ID }}
+
+  reusable-tf:
+    needs: variables
+    uses: org/alz-reusable-workflows/.github/workflows/terraform-workflow.yml@main
+    with:
+      #Runner Config
+      runs_on: ${{ needs.variables.outputs.RUNNER }}
+
+      #Environment Config
+      environment_plan: ${{ needs.variables.outputs.ENVIRONMENT_PLAN }}
+      environment_apply: ${{ needs.variables.outputs.ENVIRONMENT_APPLY }}
+
+      #TF Backend Checks
+      check_tfstate_storage: ${{ fromJson(vars.CHECK_TFSTATE_STORAGE || 'true') }}
+
+      #TF Config
+      terraform_version: ${{ vars.TERRAFORM_VERSION || '1.12.2' }}   
+      terraform_plan: ${{ fromJson(vars.TERRAFORM_PLAN || 'true') }}
+      terraform_apply: ${{ fromJson(vars.TERRAFORM_APPLY || 'true') }}
+      terraform_format: ${{ fromJson(vars.TERRAFORM_FORMAT || 'true') }}
+      terraform_validate: ${{ fromJson(vars.TERRAFORM_VALIDATE || 'true') }}
+      terraform_working_dir: ${{ vars.TERRAFORM_WORKING_DIR || './terraform' }}
+      terraform_init_args: ${{ vars.TERRAFORM_INIT_ARGS || '' }}
+      terraform_plan_args: >-
+        -var-file=config/${{ needs.variables.outputs.TERRAFORM_BACKEND_LOCATION_SHORT }}/${{ needs.variables.outputs.TERRAFORM_BACKEND_ENV }}/${{ needs.variables.outputs.TERRAFORM_BACKEND_ENV }}.tfvars 
+        -var-file=config/global.tfvars
+
+      #TF Docs Configuration
+      tf_docs_enabled: ${{ fromJson(vars.TF_DOCS_ENABLED || 'true') }}
+      tf_docs_output_file: ${{ vars.TF_DOCS_OUTPUT_FILE || '../README.md' }}
+      tf_docs_config_file: ${{ vars.TF_DOCS_CONFIG_FILE || '.terraform-docs.yml' }}
+
+      #TF Backend Config
+      terraform_backend_resource_group: ${{ needs.variables.outputs.TERRAFORM_BACKEND_RESOURCE_GROUP }}
+      terraform_backend_location: ${{ needs.variables.outputs.TERRAFORM_BACKEND_LOCATION }}
+      terraform_backend_storage_account: ${{ needs.variables.outputs.TERRAFORM_BACKEND_STORAGE_ACCOUNT }}
+      terraform_backend_container: ${{ needs.variables.outputs.TERRAFORM_BACKEND_CONTAINER }}
+      terraform_backend_sku: ${{ needs.variables.outputs.TERRAFORM_BACKEND_SKU }}
+      terraform_backend_env: ${{ needs.variables.outputs.TERRAFORM_BACKEND_ENV }}
+      terraform_backend_location_short: ${{ needs.variables.outputs.TERRAFORM_BACKEND_LOCATION_SHORT }}
+      custom_backend_config: ${{ vars.CUSTOM_BACKEND_CONFIG }}
+
+      #OIDC Configuration
+      arm_client_id: ${{ needs.variables.outputs.ARM_CLIENT_ID }}
+      arm_tenant_id: ${{ needs.variables.outputs.ARM_TENANT_ID }}
+      arm_subscription_id: ${{ needs.variables.outputs.ARM_SUBSCRIPTION_ID }}
+
+      #Misc
+      push_plan_to_pr: ${{ fromJson(vars.PUSH_PLAN_TO_PR || 'true') }}
+      reusable_workflow_branch: ${{ vars.REUSABLE_WORKFLOW_BRANCH || 'main' }}      
+      install_kubelogin: false
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+# =====================================================================
+# INFO
+# =====================================================================
+#
+# Runner Configuration via GH repo or env vars:
+# - To use GitHub-hosted runner: {"runner": "ubuntu-latest"}
+# - To use self-hosted runner: {"group": "replacesvcs", "labels": ["self-hosted", "prod", "linuxdefender"]}
+#
+# More info: see docs

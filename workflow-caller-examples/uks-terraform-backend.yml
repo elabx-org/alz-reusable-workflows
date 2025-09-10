@@ -1,0 +1,96 @@
+name: 'uks - terraform backend'
+
+on:
+  workflow_dispatch:
+    inputs:
+      tf_backend_mode:
+        description: 'Which operation to run'
+        type: choice
+        options:
+        - checks-only           # runs both checks
+        - backup-only           # runs only backup checks
+        - infra-only            # runs only infrastructure checks
+        - create                # runs in create/update mode
+        - configure-backup-only # runs in configure backup only mode   
+        default: 'checks-only'
+      environment_selection:
+        description: 'Select environments to run'
+        type: choice
+        options:
+        - all          
+        - dev
+        - sit
+        - uat
+        - prd
+        default: 'all'
+      add_suffix:
+        description: 'Add suffix to customise backend container'
+        type: choice
+        options:
+        - true
+        - false
+        default: 'false'   
+      project:
+        description: 'Select project (required if suffix = true)'
+        type: choice
+        options:
+        - default
+        default: 'default'
+      project_type:
+        description: 'Type of project (required if suffix = true)'
+        type: choice
+        options:
+        - default
+        default: 'default'                    
+
+jobs:
+  uks_dev:
+    if: ${{ github.event.inputs.environment_selection == 'dev' || github.event.inputs.environment_selection == 'all' }}
+    uses: org/alz-reusable-workflows/.github/workflows/terraform-backend-workflow.yml@main
+    secrets: inherit
+    with:
+      environment: uks dev plan
+      mode: ${{ github.event.inputs.tf_backend_mode }}
+      project: ${{ github.event.inputs.project }}
+      add_suffix: ${{ github.event.inputs.add_suffix }}
+      project_type: ${{ github.event.inputs.project_type }}
+      create_policy_exemptions: false # set this to true if you're deploying to a subscription that is in the Corp (mg-org-corp) management group.
+
+  uks_sit:
+    if: ${{ github.event.inputs.environment_selection == 'sit' || github.event.inputs.environment_selection == 'all' }}
+    uses: org/alz-reusable-workflows/.github/workflows/terraform-backend-workflow.yml@main
+    secrets: inherit
+    with:
+      environment: uks sit plan
+      mode: ${{ github.event.inputs.tf_backend_mode }}
+      project: ${{ github.event.inputs.project }}
+      add_suffix: ${{ github.event.inputs.add_suffix }}
+      project_type: ${{ github.event.inputs.project_type }}
+      create_policy_exemptions: false # set this to true if you're deploying to a subscription that is in the Corp (mg-org-corp) management group.
+
+  uks_uat:
+    if: ${{ github.event.inputs.environment_selection == 'uat' || github.event.inputs.environment_selection == 'all' }}
+    uses: org/alz-reusable-workflows/.github/workflows/terraform-backend-workflow.yml@main
+    secrets: inherit
+    with:
+      environment: uks uat plan
+      mode: ${{ github.event.inputs.tf_backend_mode }}
+      project: ${{ github.event.inputs.project }}
+      add_suffix: ${{ github.event.inputs.add_suffix }}
+      project_type: ${{ github.event.inputs.project_type }}
+      create_policy_exemptions: false # set this to true if you're deploying to a subscription that is in the Corp (mg-org-corp) management group.
+
+  uks_prd:
+    if: ${{ github.event.inputs.environment_selection == 'prd' || github.event.inputs.environment_selection == 'all' }}
+    uses: org/alz-reusable-workflows/.github/workflows/terraform-backend-workflow.yml@main
+    secrets: inherit
+    with:
+      environment: uks prd plan
+      mode: ${{ github.event.inputs.tf_backend_mode }}
+      project: ${{ github.event.inputs.project }}
+      add_suffix: ${{ github.event.inputs.add_suffix }}
+      project_type: ${{ github.event.inputs.project_type }}
+      create_policy_exemptions: false # set this to true if you're deploying to a subscription that is in the Corp (mg-org-corp) management group.
+    
+
+# Docs: see docs

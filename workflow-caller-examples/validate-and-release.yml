@@ -35,7 +35,7 @@ on:
 
 jobs:
   release-module:
-    uses: elabx-org/alz-reusable-workflows/.github/workflows/mod-validate-and-release.yml@main
+    uses: org/alz-reusable-workflows/.github/workflows/mod-validate-and-release.yml@main
     with:
       runs_on: >-
         ${{ vars.RUNNER_CONFIG || 
@@ -46,17 +46,17 @@ jobs:
       terraform_working_dir: ${{ vars.TERRAFORM_WORKING_DIR || '.' }}
       
       # Job execution controls
-      run_check_tf_changes: ${{ fromJSON(vars.RUN_CHECK_TF_CHANGES != null && vars.RUN_CHECK_TF_CHANGES || 'false') }}                                          
-      run_validate_module: ${{ fromJSON(vars.RUN_VALIDATE_MODULE != null && vars.RUN_VALIDATE_MODULE || 'false') }}                                         
-      run_tf_docs: ${{ fromJSON(vars.RUN_TF_DOCS != null && vars.RUN_TF_DOCS || 'false') }}                                                      
+      run_check_tf_changes: ${{ fromJSON(vars.RUN_CHECK_TF_CHANGES != null && vars.RUN_CHECK_TF_CHANGES || 'true') }}                                          
+      run_validate_module: ${{ fromJSON(vars.RUN_VALIDATE_MODULE != null && vars.RUN_VALIDATE_MODULE || 'true') }}                                         
+      run_tf_docs: ${{ fromJSON(vars.RUN_TF_DOCS != null && vars.RUN_TF_DOCS || 'true') }}                                                      
       run_release_and_tag: ${{ fromJSON(vars.RUN_RELEASE_AND_TAG != null && vars.RUN_RELEASE_AND_TAG || 'true') }}                     
       
       # Terraform docs settings
       tf_docs_output_file: ${{ vars.TF_DOCS_OUTPUT_FILE || 'README.md' }}                
       tf_docs_config_file: ${{ vars.TF_DOCS_CONFIG_FILE || '.terraform-docs.yml' }}          
-      tf_docs_clear_workspace: ${{ fromJSON(vars.TF_DOCS_CLEAR_WORKSPACE != null && vars.TF_DOCS_CLEAR_WORKSPACE || 'true') }}    
+      tf_docs_clear_workspace: ${{ fromJSON(vars.TF_DOCS_CLEAR_WORKSPACE != null && vars.TF_DOCS_CLEAR_WORKSPACE || 'false') }}    
 
- 
+
 
 # =====================================================================
 # INFO
@@ -103,3 +103,5 @@ jobs:
 # Note: Repository variables take precedence over default values in the workflow.
 #       Use these to customize behavior without changing the workflow file.
 #
+#
+# =====================================================================

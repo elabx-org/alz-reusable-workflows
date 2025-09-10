@@ -1,0 +1,55 @@
+name: setup gh env
+
+on:
+  workflow_dispatch:
+    inputs:
+      config_file:
+        description: 'Select configuration file (If selected, other input values will be ignored)'
+        required: false
+        type: choice
+        options:
+          - 'none'
+          - '.github/configs/setup-env-config.yml'
+        default: 'none'  
+      project_name:
+        description: 'Project name (e.g. 3-4 letters project short name)'
+        required: false
+      region:
+        description: 'Azure region code (e.g. uks,ukw | comma-separated for multiple env)'
+        required: false
+        type: string
+        default: 'uks'
+      environments:
+        description: 'Environments to create (comma-separated, e.g. dev,pprd,prd)'
+        required: false
+      subscription_ids:
+        description: 'Subscription IDs (comma-separated, same order as environments)'
+        required: false
+      client_ids:
+        description: 'Client IDs (comma-separated, same order as environments)'
+        required: false
+      tenant_id:
+        description: 'Azure Tenant ID'
+        required: true
+        default: 'replace-with-org-tenant-id'
+      storage_suffix:
+        description: 'Storage account suffix'
+        required: false
+        default: '001'
+
+jobs:
+  call-reusable-workflow:
+    uses: org/alz-reusable-workflows/.github/workflows/gh-env-setup.yml@main
+    with:
+      config_file: ${{ inputs.config_file }}
+      project_name: ${{ inputs.project_name }}
+      region: ${{ inputs.region }}
+      environments: ${{ inputs.environments }}
+      subscription_ids: ${{ inputs.subscription_ids }}
+      client_ids: ${{ inputs.client_ids }}
+      tenant_id: ${{ inputs.tenant_id }}
+      storage_suffix: ${{ inputs.storage_suffix }}
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+
+# doc: see docs
